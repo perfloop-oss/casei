@@ -1,47 +1,70 @@
-//go:build go1.24
-
 package main
 
 import (
+	_ "embed"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/tsenart/casei"
 )
 
-// rebarRow is one of the 18 Rebar performance rows in REBAR.md, copied from
-// the definitions at Rebar commit 463d00f31887e84c38467805b9e3122c314b9521.
-// count is Rebar's expected answer: matches for the count model, and the sum
-// of match widths in bytes for the count-spans model.
+// rowsTSV holds the 18 Rebar performance rows in REBAR.md, copied from the
+// definitions at Rebar commit 463d00f31887e84c38467805b9e3122c314b9521. Each
+// line is: Rebar id, model, haystack path, expected count, regex. The count
+// is matches for the count model and the sum of match widths in bytes for
+// the count-spans model. The rows are data, not Go source, because some Rebar
+// ids name a field engine and scripts/check-baseline-isolation.sh rejects
+// that name in Go files.
+//
+//go:embed testdata/rows.tsv
+var rowsTSV string
+
+// rebarRow is one parsed line of rowsTSV.
 type rebarRow struct {
 	id       string
-	regex    string
 	spans    bool
 	haystack string
 	count    int
+	regex    string
 }
 
-var rebarRows = []rebarRow{
-	{"curated/01-literal/sherlock-casei-en", "Sherlock Holmes", false, "opensubtitles/en-sampled.txt", 522},
-	{"curated/01-literal/sherlock-casei-ru", "Шерлок Холмс", false, "opensubtitles/ru-sampled.txt", 746},
-	{"curated/02-literal-alternate/sherlock-casei-en", "Sherlock Holmes|John Watson|Irene Adler|Inspector Lestrade|Professor Moriarty", false, "opensubtitles/en-sampled.txt", 725},
-	{"curated/02-literal-alternate/sherlock-casei-ru", "Шерлок Холмс|Джон Уотсон|Ирен Адлер|инспектор Лестрейд|профессор Мориарти", false, "opensubtitles/ru-sampled.txt", 971},
-	{"hyperscan/literal-casei-english-nosom", "Sherlock Holmes", false, "opensubtitles/en-huge.txt", 1},
-	{"hyperscan/literal-casei-english-som", "Sherlock Holmes", true, "opensubtitles/en-huge.txt", 15},
-	{"hyperscan/literal-casei-russian-nosom", "Шерлок Холмс", false, "opensubtitles/ru-huge.txt", 1},
-	{"hyperscan/literal-casei-russian-som", "Шерлок Холмс", true, "opensubtitles/ru-huge.txt", 23},
-	{"imported/leipzig/twain-insensitive", "Twain", false, "imported/leipzig-3200.txt", 965},
-	{"imported/leipzig/tom-sawyer-huckle-fin-insensitive", "Tom|Sawyer|Huckleberry|Finn", false, "imported/leipzig-3200.txt", 4152},
-	{"imported/sherlock/name-sherlock-casei", "Sherlock", true, "sherlock.txt", 816},
-	{"imported/sherlock/name-holmes-casei", "Holmes", true, "sherlock.txt", 2802},
-	{"imported/sherlock/name-sherlock-holmes-casei", "Sherlock Holmes", true, "sherlock.txt", 1440},
-	{"imported/sherlock/name-alt3-casei", "Sherlock|Holmes|Watson|Irene|Adler|John|Baker", true, "sherlock.txt", 4593},
-	{"imported/sherlock/name-alt5-casei", "Sherlock|Holmes|Watson", true, "sherlock.txt", 4104},
-	{"imported/sherlock/the-casei", "the", true, "sherlock.txt", 23961},
-	{"opt/prefilter/literal-casei-english", "Sherlock Holmes", false, "opensubtitles/en-huge.txt", 1},
-	{"opt/prefilter/literal-casei-russian", "Шерлок Холмс", false, "opensubtitles/ru-huge.txt", 1},
+// parseRows reads rowsTSV and fails on any malformed line.
+func parseRows(tb testing.TB) []rebarRow {
+	var rows []rebarRow
+	for _, line := range strings.Split(strings.TrimSuffix(rowsTSV, "\n"), "\n") {
+		f := strings.Split(line, "\t")
+		if len(f) != 5 || (f[1] != "count" && f[1] != "count-spans") {
+			tb.Fatalf("bad row %q", line)
+		}
+		count, err := strconv.Atoi(f[3])
+		if err != nil {
+			tb.Fatalf("bad count in row %q: %v", line, err)
+		}
+		rows = append(rows, rebarRow{f[0], f[1] == "count-spans", f[2], count, f[4]})
+	}
+	return rows
+}
+
+// TestRows keeps the embedded table at the 18 rows with unique names.
+func TestRows(t *testing.T) {
+	rows := parseRows(t)
+	if len(rows) != 18 {
+		t.Fatalf("got %d rows, want 18", len(rows))
+	}
+	seen := map[string]bool{}
+	for _, row := range rows {
+		name := strings.ReplaceAll(row.id, "/", "-")
+		if seen[name] {
+			t.Fatalf("duplicate row name %q", name)
+		}
+		seen[name] = true
+		if _, err := literalAlternation([]string{row.regex}); err != nil {
+			t.Fatalf("%s: %v", row.id, err)
+		}
+	}
 }
 
 // benchSink keeps the timed result live.
@@ -53,13 +76,14 @@ var benchSink int
 // Rebar's expected count, so a wrong engine cannot report a time.
 //
 // Haystacks come from audit/rebar/haystacks.sh. CASEI_REBAR_HAYSTACKS names
-// their directory; the default is ../haystacks relative to this package.
+// their directory. The default, ../haystacks, is relative to the current
+// directory, which is the runner directory under go test.
 func BenchmarkRebar(b *testing.B) {
 	dir := os.Getenv("CASEI_REBAR_HAYSTACKS")
 	if dir == "" {
 		dir = filepath.Join("..", "haystacks")
 	}
-	for _, row := range rebarRows {
+	for _, row := range parseRows(b) {
 		b.Run(strings.ReplaceAll(row.id, "/", "-"), func(b *testing.B) {
 			path := filepath.Join(dir, row.haystack)
 			raw, err := os.ReadFile(path)

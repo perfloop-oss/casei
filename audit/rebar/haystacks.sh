@@ -17,12 +17,17 @@ if [ "$#" -ne 1 ]; then
 fi
 dest=$1
 
+if command -v sha256sum >/dev/null 2>&1; then
+	hasher="sha256sum"
+elif command -v shasum >/dev/null 2>&1; then
+	hasher="shasum -a 256"
+else
+	echo "haystacks: need sha256sum or shasum" >&2
+	exit 1
+fi
+
 sha256() {
-	if command -v sha256sum >/dev/null 2>&1; then
-		sha256sum "$1" | cut -d' ' -f1
-	else
-		shasum -a 256 "$1" | cut -d' ' -f1
-	fi
+	$hasher "$1" | cut -d' ' -f1
 }
 
 # fetch PATH SHA256 downloads one haystack unless a verified copy exists.
