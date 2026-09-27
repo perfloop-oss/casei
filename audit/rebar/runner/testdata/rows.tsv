@@ -1,0 +1,18 @@
+curated/01-literal/sherlock-casei-en	count	opensubtitles/en-sampled.txt	522	Sherlock Holmes
+curated/01-literal/sherlock-casei-ru	count	opensubtitles/ru-sampled.txt	746	Шерлок Холмс
+curated/02-literal-alternate/sherlock-casei-en	count	opensubtitles/en-sampled.txt	725	Sherlock Holmes|John Watson|Irene Adler|Inspector Lestrade|Professor Moriarty
+curated/02-literal-alternate/sherlock-casei-ru	count	opensubtitles/ru-sampled.txt	971	Шерлок Холмс|Джон Уотсон|Ирен Адлер|инспектор Лестрейд|профессор Мориарти
+hyperscan/literal-casei-english-nosom	count	opensubtitles/en-huge.txt	1	Sherlock Holmes
+hyperscan/literal-casei-english-som	count-spans	opensubtitles/en-huge.txt	15	Sherlock Holmes
+hyperscan/literal-casei-russian-nosom	count	opensubtitles/ru-huge.txt	1	Шерлок Холмс
+hyperscan/literal-casei-russian-som	count-spans	opensubtitles/ru-huge.txt	23	Шерлок Холмс
+imported/leipzig/twain-insensitive	count	imported/leipzig-3200.txt	965	Twain
+imported/leipzig/tom-sawyer-huckle-fin-insensitive	count	imported/leipzig-3200.txt	4152	Tom|Sawyer|Huckleberry|Finn
+imported/sherlock/name-sherlock-casei	count-spans	sherlock.txt	816	Sherlock
+imported/sherlock/name-holmes-casei	count-spans	sherlock.txt	2802	Holmes
+imported/sherlock/name-sherlock-holmes-casei	count-spans	sherlock.txt	1440	Sherlock Holmes
+imported/sherlock/name-alt3-casei	count-spans	sherlock.txt	4593	Sherlock|Holmes|Watson|Irene|Adler|John|Baker
+imported/sherlock/name-alt5-casei	count-spans	sherlock.txt	4104	Sherlock|Holmes|Watson
+imported/sherlock/the-casei	count-spans	sherlock.txt	23961	the
+opt/prefilter/literal-casei-english	count	opensubtitles/en-huge.txt	1	Sherlock Holmes
+opt/prefilter/literal-casei-russian	count	opensubtitles/ru-huge.txt	1	Шерлок Холмс

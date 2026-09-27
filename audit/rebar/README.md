@@ -41,6 +41,41 @@ the remaining rows.
   selects the fastest competitor on each pass, and recomputes every ratio in
   `REBAR.md`.
 
+## Measure one row with Go
+
+[`runner/bench_test.go`](runner/bench_test.go) has `BenchmarkRebar`, with one
+sub-benchmark for each of the 18 rows. The name is the Rebar id with `/`
+replaced by `-`, for example
+`BenchmarkRebar/curated-01-literal-sherlock-casei-en`. Each row uses the
+pattern, model, haystack, and expected count from the pinned Rebar definition,
+listed in [`runner/testdata/rows.tsv`](runner/testdata/rows.tsv). Before
+timing, it runs the runner's `verifyEnumeration` and checks Rebar's count. It
+then times the runner's `countMatches`, which is the operation Rebar times.
+
+Fetch the haystacks first. The script checks each file against a pinned
+sha256 and keeps files that are already correct:
+
+```sh
+audit/rebar/haystacks.sh audit/rebar/haystacks
+```
+
+A paired claim builds the test binary in each arm and runs one row. `OUT` and
+the haystack directory must be absolute paths:
+
+```sh
+cd audit/rebar/runner && go test -c -o "$OUT/rebar.test" .
+CASEI_REBAR_HAYSTACKS=/abs/path/to/haystacks "$OUT/rebar.test" \
+  -test.run '^$' -test.bench '^BenchmarkRebar/<row>$' -test.benchtime=1s
+```
+
+The runner module's `replace` directive points at the repository root, so
+each arm's binary measures that arm's own `casei` source. Without
+`CASEI_REBAR_HAYSTACKS`, the benchmark reads `../haystacks` relative to the
+current directory. Under `go test` in the runner directory, that is
+`audit/rebar/haystacks`.
+
+## Verify the record
+
 Verify the checked-in record from any directory:
 
 ```sh
