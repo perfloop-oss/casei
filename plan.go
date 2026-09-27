@@ -1041,6 +1041,7 @@ func (p *searchPlan) makeASCIIAnchor(pattern string) {
 		fixedPrefix++
 	}
 	if fixedPrefix < 3 {
+		p.makeASCIIInteriorAnchor(pattern)
 		return
 	}
 
@@ -2140,9 +2141,23 @@ func (p *searchPlan) findASCIIAnchor(haystack string) (Match, bool) {
 		if at == limit {
 			break
 		}
-		matched := p.asciiAnchorMatches(haystack, at)
+		start := at
+		if p.asciiProbe.firstAt != 0 {
+			// A VBMI survivor can alias high bytes. Prove the ASCII window's
+			// first byte before interpreting it as a decoded-unit boundary.
+			if !asciiProbeAt(haystack, at, &p.asciiProbe) {
+				at++
+				continue
+			}
+			start = recoverASCIIInteriorStart(haystack, at+p.asciiProbe.firstAt, p.asciiProbe.firstAt)
+			if start < 0 {
+				at++
+				continue
+			}
+		}
+		matched := p.asciiAnchorMatches(haystack, start)
 		if matched {
-			return Match{Pattern: 0, Start: at}, true
+			return Match{Pattern: 0, Start: start}, true
 		}
 		at++
 	}
