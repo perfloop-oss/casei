@@ -42,6 +42,9 @@ A change claiming a new construction ships `NOVELTY.md` containing:
 sweep's catalog against eighty years of literature. Point 3 is where these
 claims usually die.
 
+A change that improves an existing route and claims no new construction needs
+no `NOVELTY.md` entry.
+
 ## 3. A negative result is a result
 
 If the assessment concludes every component is known art, record that in
@@ -126,14 +129,37 @@ so when reporting it, and treat closing that gap as the work rather than the
 number as a win. An entrant reporting a narrower width than the machine offers
 is a handicapped opponent, not a beaten one.
 
-A measurement with no competitor in it is not evidence. Two ways to produce
-one, both of which have happened here:
+A measurement with no competitor in it is not evidence of a position against
+the field. Two ways to produce one, both of which have happened here:
 
 - a benchmark written for this change, compared against its own previous value;
 - a per-implementation lane of an arena benchmark
   (`BenchmarkIndexFold/<row>/candidate`, and likewise `/veloz`, `/regexp`,
   `/ceiling`). Those lanes exist for profiling. Reporting `/candidate` borrows
   the arena's authority for a number that never looked at the field.
+
+### Landing a change
+
+The acceptance bar below is the bar for a published result, not for each
+change. A change lands on `master` when:
+
+1. correctness (section 8), one engine (section 5), and baseline isolation
+   (section 6) hold;
+2. a paired, order-alternating comparison against current `master` on the same
+   host shows that the change speeds up the full operations it targets -- a
+   Rebar row as `Matcher.Each` over its pinned haystack, or a `BenchmarkBar`
+   row -- and does not slow the guard rows it names;
+3. no `BenchmarkBar` row that is below 1.0 on `master` reaches 1.0 on that
+   host.
+
+A change may land while a target row still loses to the field. Report the row's
+`x_vs_best`, name it as losing, and say what remains. Improvements land one at
+a time; holding a verified improvement until it beats the field alone strands
+it, and the next change cannot build on it.
+
+The comparison against `master` shows that the change is faster than the code
+it replaces. It does not show a position against the field; only `x_vs_best`
+with at least two entrants does.
 
 ### The acceptance bar
 
