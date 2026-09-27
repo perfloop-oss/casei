@@ -21,8 +21,9 @@ type Match struct {
 // their shared fold-orbit transition plan; Find returns one answer and Each
 // enumerates non-overlapping answers over the haystack.
 type Matcher struct {
-	patterns []string
-	plan     *searchPlan
+	patterns       []string
+	plan           *searchPlan
+	asciiEachProbe *asciiProbe
 }
 
 // NewMatcher builds a Matcher over the given pattern set. The set is copied;
@@ -31,7 +32,12 @@ type Matcher struct {
 func NewMatcher(patterns []string) *Matcher {
 	p := make([]string, len(patterns))
 	copy(p, patterns)
-	return &Matcher{patterns: p, plan: newSearchPlan(p)}
+	plan := newSearchPlan(p)
+	m := &Matcher{patterns: p, plan: plan}
+	if len(p) == 1 {
+		m.asciiEachProbe = plan.makeASCIIEachProbe(p[0])
+	}
+	return m
 }
 
 // Patterns returns a copy of the pattern set.
@@ -65,6 +71,11 @@ func (m *Matcher) Each(haystack string, yield func(match Match, width int) bool)
 	if m.plan.empty < 0 && m.plan.rawByteMulti.usable() {
 		return m.plan.eachRawByteFixedAnchored(haystack, yield)
 	}
+	if m.plan.patternCount == 1 && m.plan.maxUnits > 0 && len(haystack) >= 4096 &&
+		!m.plan.opaqueContinuation && !m.plan.asciiRun && !m.plan.asciiPair.usable() &&
+		!m.plan.asciiStaticAnchor && !m.plan.asciiByteAnchor && m.plan.asciiProbe.usable() {
+		return m.eachASCIIProbe(haystack, yield)
+	}
 	for at := 0; at <= len(haystack); {
 		match, width, ok := m.plan.findWithWidth(haystack[at:])
 		if !ok {
@@ -88,6 +99,63 @@ func (m *Matcher) Each(haystack string, yield func(match Match, width int) bool)
 		}
 		_, size := utf8.DecodeRuneInString(haystack[match.Start:])
 		at = match.Start + size
+	}
+	return true
+}
+
+// eachASCIIProbe keeps the selected single-pattern probe and cursor alive across
+// yields. The probe only rejects impossible starts; the compiled plan still
+// confirms every survivor and determines its exact source width.
+func (m *Matcher) eachASCIIProbe(haystack string, yield func(Match, int) bool) bool {
+	p := m.plan
+	probe := &p.asciiProbe
+	if m.asciiEachProbe != nil {
+		probe = m.asciiEachProbe
+	}
+	limit := len(haystack) - len(p.asciiNeedle) + 1
+	if p.asciiVerifyTokens {
+		limit = len(haystack) - probe.thirdAt
+	}
+	if limit < 0 {
+		return true
+	}
+
+	nextStart := 0
+	for at := 0; at < limit; {
+		at += probeSkipBytes(haystack, at, limit-at, probe)
+		if at == limit {
+			break
+		}
+		start := at
+		if probe.firstAt != 0 {
+			if !asciiProbeAt(haystack, at, probe) {
+				at++
+				continue
+			}
+			start = recoverASCIIInteriorStart(haystack, at+probe.firstAt, probe.firstAt)
+			if start < 0 {
+				at++
+				continue
+			}
+		}
+		if start < nextStart {
+			at++
+			continue
+		}
+		if !p.asciiAnchorMatches(haystack, start) {
+			at++
+			continue
+		}
+
+		width := len(p.asciiNeedle)
+		if p.asciiVerifyTokens {
+			width = matcherMatchEnd(haystack, start, p.maxUnits) - start
+		}
+		if !yield(Match{Pattern: 0, Start: start}, width) {
+			return false
+		}
+		nextStart = start + width
+		at = nextStart
 	}
 	return true
 }

@@ -37,7 +37,7 @@ type searchPlan struct {
 	// partial-triple shape. Its bounded pair table only nominates starts; the
 	// decoded plan replays each survivor and remains the match authority.
 	asciiPairAnchors asciiPairAnchors
-	// asciiProbe is a single-pattern, byte-aligned block transition. It
+	// asciiProbe is the single-pattern search transition used by Find. It
 	// intersects three dispersed literal positions, then confirms the same
 	// compiled pattern at the surviving start.
 	asciiProbe     asciiProbe
@@ -1158,6 +1158,43 @@ func (p *searchPlan) makeASCIIAnchor(pattern string) {
 		}
 		makeASCIIPairVBMIProbe(pair, pattern)
 	}
+}
+
+// makeASCIIEachProbe builds an Each-only rare-prefix screen when its adjacent
+// second byte is statically rarer than the current middle probe. The first byte
+// remains at offset zero, byte one forms the tighter prefix pair, and byte
+// three supplies a later conservative anchor. Exact confirmation remains owned
+// by asciiAnchorMatches; Find keeps using the original probe.
+func (p *searchPlan) makeASCIIEachProbe(pattern string) *asciiProbe {
+	if p.patternCount != 1 || len(pattern) < 4 || !p.asciiProbe.usable() || p.asciiVerifyTokens ||
+		p.opaqueContinuation || p.asciiRun || p.asciiPair.usable() || p.asciiStaticAnchor || p.asciiByteAnchor {
+		return nil
+	}
+	second, middle := pattern[1], pattern[len(pattern)/2]
+	if isASCIILetter(second) {
+		second |= 0x20
+	}
+	if isASCIILetter(middle) {
+		middle |= 0x20
+	}
+	if asciiRarity(second) >= asciiRarity(middle) {
+		return nil
+	}
+
+	probe := p.asciiProbe
+	probe.firstAt, probe.secondAt, probe.thirdAt = 0, 1, 3
+	probe.first, probe.second, probe.third, probe.fold = 0, 0, 0, 0
+	values := [3]*byte{&probe.first, &probe.second, &probe.third}
+	for i, at := range [3]int{probe.firstAt, probe.secondAt, probe.thirdAt} {
+		value := pattern[at]
+		if isASCIILetter(value) {
+			value |= 0x20
+			probe.fold |= 1 << uint(i)
+		}
+		*values[i] = value
+	}
+	makeASCIIVBMIProbe(&probe)
+	return &probe
 }
 
 // makeStaticASCIIByteAnchor avoids sampling the haystack for the narrow
