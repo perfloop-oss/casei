@@ -1853,6 +1853,49 @@ only by a complete field measurement showing a previously rejected transition
 wins without moving another row above the acceptance bar, plus the same
 Unicode/invalid-byte differential evidence.
 
+## Static interior ASCII window: bounded N=1 prototype; causal timing unmeasured
+
+For an ASCII singleton of at most 64 units whose first unit can take a wider
+simple-fold spelling and whose following fold-width-invariant run has at least
+three units, compile the longest contiguous ASCII-only fold-orbit window in
+that run. The route deliberately starts at unit one: punctuation or another
+width-changing unit before the window stays on the existing decoded path. The existing three-position
+`asciiProbe` stores the original pattern offsets; its nonzero `firstAt` is the
+fixed prefix-unit count. No plan layout or assembly change is needed.
+
+The existing BW/VBMI/portable probe nominates a nominal byte position. Confirm
+the three bytes exactly to reject VBMI high-byte aliases, walk backward from
+the window boundary by that fixed unit count, and let `matchesSingleAt`
+confirm the entire original plan. A true ASCII pattern prefix consumes at least
+one source byte per unit, so every true window's nominal position is
+nonnegative. Advancing boundary-aligned windows advances decoded-unit rank;
+subtracting the same unit count preserves start order. Subtracting bytes does
+not: `ſherlock` is the counterexample.
+
+This is an application of known components, not a new-construction claim:
+
+- StringZilla's [safe-window head/tail verification](https://github.com/ashvardanian/StringZilla/blob/657f21c5d8c2c2da5da06d4a9ad87c3ef80953d0/include/stringzilla/utf8_uncased/serial.h#L397-L533)
+  already performs reverse folded-head verification. Its full-fold contract
+differs; this prototype only recovers a fixed count of source units and reuses
+this package's complete simple-fold confirmation.
+- Vectorscan 5.4.12's [Noodle builder](https://github.com/VectorCamp/vectorscan/blob/vectorscan/5.4.12/src/hwlm/noodle_build.cpp)
+  selects an interior adjacent-byte key, and its [runtime confirmation](https://github.com/VectorCamp/vectorscan/blob/vectorscan/5.4.12/src/hwlm/noodle_engine.cpp)
+  checks a compiled literal around a survivor. This is a technique source, not
+a claim that Noodle is the selected engine for any measured row.
+- The existing casei ASCII probe, token confirmation, and `CONTEXT.md`'s
+  prefix-invariance discussion establish the remaining components.
+
+The implementation is independent; it does not copy, link, or call these
+engines. The checked-in acceptance record remains a historical 36-row snapshot;
+the current verifier requires two additional complete-triple rows, and no
+current two-host receipt is retained here. That record cannot establish the
+interior route's causal cost. The interior Rebar timing remains unmeasured.
+Falsifiers are a missed width-changing occurrence, out-of-order source start,
+a high-byte alias accepted as a boundary, any public differential mismatch, or
+no full-field native saving after confirmation and prefix-recovery costs.
+Portable tests and fuzzing are correctness preflight only. The final source
+retains all other accepted contributions and the complete field contract.
+
 ## Provenance
 
 This contribution contains novelty assessments and implementation provenance
