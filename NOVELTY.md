@@ -1539,6 +1539,43 @@ materializing a separate vector AND. The general pair-root loop separately
 unrolls two independent blocks after its first one-block probe, which is
 ordinary dependency/branch scheduling rather than a different matcher.
 
+### Plan-owned four-position ASCII bucket filter
+
+The source-boundary adaptation adds a four-position table to eligible
+multi-literal plans. At plan construction, each of at most eight slots names an
+ASCII trie prefix; four 128-entry tables encode which prefix bits accept each
+byte at each position. A three-unit terminal leaves position four unrestricted.
+The AVX-512 VBMI block kernel permutes four overlapping byte vectors through
+those tables and intersects the slot masks over 64 starts. It uses that
+schedule only after all 67 bytes needed by the overlapping windows prove ASCII;
+high-byte blocks use the existing Shufti projection, and the shared plan
+confirms every stop.
+
+The closest mechanical source is Vectorscan 5.4.12 Teddy/FDR
+([`src/fdr/teddy.cpp`](https://github.com/VectorCamp/vectorscan/blob/vectorscan/5.4.12/src/fdr/teddy.cpp),
+[`src/fdr/fdr.c`](https://github.com/VectorCamp/vectorscan/blob/vectorscan/5.4.12/src/fdr/fdr.c)),
+whose compiled byte classes and shifted masks screen candidate starts before
+confirmation. `CONTEXT.md` §§3 and 8 already list Teddy/Shufti as prior art.
+This package reimplements the technique; no Vectorscan code is imported,
+linked, embedded, or copied. The composition is a plan-owned ASCII prefilter
+with casei's existing simple-fold decoder, ordering, source widths, and
+high-byte/portable fallback, not a second matcher or new Unicode recognizer.
+This is a provenance entry, not a novelty claim for four-byte buckets or
+Teddy-style table lookup. The package-specific result under evaluation is a
+single plan route that uses the bucket only on proven-ASCII blocks and retains
+the exact casei confirmation/fallback contract; neither the bucket alone nor
+the old Shufti transition supplies that combination. If the paired Rebar targets
+do not improve without violating the Russian, single-literal, or BenchmarkBar
+guards, the composition has no measured performance result.
+
+The falsifier is direct: the trie/table model and assembly model must agree at
+every tested block boundary, and fast/disabled paths must match Shufti results,
+pattern ordering, widths, Unicode and malformed-byte cases. The Rebar test
+also checks pinned counts and fewer bucket stops on the target rows. Paired
+Rebar claims test whether the plan-specific composition improves those whole
+operations; the separate BenchmarkBar field report remains the authority for
+field position.
+
 The tagged multi-anchor miss loop likewise carries four independent primary
 blocks. Its retained schedule applies `VPTESTMB` directly to each pair of
 pattern-tag vectors, retains the four k-masks, and crosses only the earliest
