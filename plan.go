@@ -19,17 +19,19 @@ type searchPlan struct {
 	// ascii and opaque map respectively valid one-byte runes and invalid UTF-8
 	// bytes to plan tokens. Token zero means that no pattern can consume the
 	// input unit, which always returns the state machine to its root.
-	ascii                [utf8.RuneSelf]uint32
-	opaque               [256]uint32
-	rootByte             [256]uint8
-	rootKind             uint8
-	rootNeedle           byte
-	pairKind             uint8
-	pairNeedle           byte
-	filter               rootFilter
-	pairSecond           bool
-	triples              tripleFilter
-	tripleRoots          []bool
+	ascii      [utf8.RuneSelf]uint32
+	opaque     [256]uint32
+	rootByte   [256]uint8
+	rootKind   uint8
+	rootNeedle byte
+	pairKind   uint8
+	pairNeedle byte
+	filter     rootFilter
+	pairSecond bool
+	triples    tripleFilter
+	// tripleRoots marks covered trie tokens during compilation. An eligible
+	// complete plan reuses this slice for its plan-owned bucket table afterward.
+	tripleRoots          []byte
 	triplesComplete      bool
 	asciiTriples         tripleFilter
 	asciiTriplesComplete bool
@@ -364,6 +366,15 @@ func makeTripleShuftiFilter(filter tripleFilter) tripleShuftiFilter {
 	out.valid = 1
 	return out
 }
+
+const (
+	tripleBucketPrefixBytes = 4
+	tripleBucketTableBytes  = tripleBucketPrefixBytes * 128
+	tripleBucketFilterBytes = tripleBucketTableBytes + 2
+	tripleBucketValidMarker = 0xa5
+)
+
+type tripleBucketFilter []byte
 
 func tripleShuftiAt(first, second, third byte, filter *tripleShuftiFilter) bool {
 	matches := filter.firstLo[first&0x0f] & filter.firstHi[first>>4]
@@ -957,6 +968,9 @@ func newSearchPlan(patterns []string) *searchPlan {
 		p.makeUnicodeAnchor(patterns[0])
 	}
 	p.makeRawByteTokenPlan(patterns)
+	if p.patternCount > 1 && p.triplesComplete && !p.rawByteMulti.usable() {
+		p.makeTripleBucketFilter()
+	}
 	return p
 }
 
@@ -1710,7 +1724,7 @@ func (p *searchPlan) finish(nextToken uint32) {
 // asciiTripleRootsComplete reports whether triples cover every root which an
 // all-ASCII haystack can reach. Roots that have only multi-byte renderings are
 // impossible on that restricted stream and do not need a byte-prefix stop.
-func (p *searchPlan) asciiTripleRootsComplete(roots []bool) bool {
+func (p *searchPlan) asciiTripleRootsComplete(roots []byte) bool {
 	if !p.asciiTriples.usable() {
 		return false
 	}
@@ -1719,7 +1733,7 @@ func (p *searchPlan) asciiTripleRootsComplete(roots []bool) bool {
 			continue
 		}
 		if _, isRoot := p.nodes[0].edges[token]; isRoot &&
-			(int(token) >= len(roots) || !roots[token]) {
+			(int(token) >= len(roots) || roots[token] == 0) {
 			return false
 		}
 	}
@@ -1730,7 +1744,7 @@ func isASCIILetter(b byte) bool {
 	return 'A' <= b && b <= 'Z' || 'a' <= b && b <= 'z'
 }
 
-func (p *searchPlan) makeTripleFilter() (tripleFilter, []bool, bool) {
+func (p *searchPlan) makeTripleFilter() (tripleFilter, []byte, bool) {
 	type tripleForm struct {
 		bytes string
 		fold  bool
@@ -1783,7 +1797,7 @@ func (p *searchPlan) makeTripleFilter() (tripleFilter, []bool, bool) {
 	}
 
 	var filter tripleFilter
-	roots := make([]bool, p.stride)
+	roots := make([]byte, p.stride)
 	for token := uint32(1); int(token) < p.stride; token++ {
 		state, ok := p.nodes[0].edges[token]
 		if !ok || unsafeRoot[token] {
@@ -1836,12 +1850,12 @@ func (p *searchPlan) makeTripleFilter() (tripleFilter, []bool, bool) {
 		}
 		if expand(state, token, [3]byte{}, 0, 0) {
 			filter = candidate
-			roots[token] = true
+			roots[token] = 1
 		}
 	}
 	complete := true
 	for token := range p.nodes[0].edges {
-		if !roots[token] {
+		if roots[token] == 0 {
 			complete = false
 			break
 		}
@@ -1849,7 +1863,7 @@ func (p *searchPlan) makeTripleFilter() (tripleFilter, []bool, bool) {
 	return filter, roots, complete
 }
 
-func (p *searchPlan) makeRootFilter(excludeRoots []bool) rootFilter {
+func (p *searchPlan) makeRootFilter(excludeRoots []byte) rootFilter {
 	forms := make([][]string, p.stride)
 	var encoded [utf8.UTFMax]byte
 	for r, token := range p.runes {
@@ -1945,7 +1959,7 @@ func (p *searchPlan) makeRootFilter(excludeRoots []bool) rootFilter {
 			continue
 		}
 		rootForms := forms[token]
-		if int(token) < len(excludeRoots) && excludeRoots[token] {
+		if int(token) < len(excludeRoots) && excludeRoots[token] != 0 {
 			continue
 		}
 		if len(rootForms) == 0 {
@@ -3093,6 +3107,12 @@ func (p *searchPlan) findASCIIPairAnchored(haystack string) (Match, bool) {
 // local offset ring can start anew after each such span instead of decoding
 // every unrelated UTF-8 rune.
 func (p *searchPlan) findFiltered(haystack string) (Match, bool) {
+	var bucket tripleBucketFilter
+	useBucket := false
+	if p.patternCount > 1 {
+		bucket = p.tripleBucketFilter()
+		useBucket = bucket.usable() && asciiPairVBMIEnabled()
+	}
 	var inlineStarts [256]int
 	starts := inlineStarts[:]
 	if p.maxUnits > len(starts) {
@@ -3121,7 +3141,13 @@ func (p *searchPlan) findFiltered(haystack string) (Match, bool) {
 				skipped = filterSkipBytes(haystack, at, &p.filter)
 			}
 			if p.triples.usable() {
-				if tripleSkipped := tripleSkipBytes(haystack, at, &p.triples); tripleSkipped < skipped {
+				var tripleSkipped int
+				if useBucket {
+					tripleSkipped = tripleBucketSkipBytes(haystack, at, bucket, &p.triples.shufti)
+				} else {
+					tripleSkipped = tripleSkipBytes(haystack, at, &p.triples)
+				}
+				if tripleSkipped < skipped {
 					skipped = tripleSkipped
 				}
 			}

@@ -241,6 +241,14 @@ func tripleShuftiSkipBytes(s string, at int, filter *tripleShuftiFilter) int {
 	return tripleShuftiSkipScalar(s, at, filter)
 }
 
+func (f tripleBucketFilter) usable() bool                    { return false }
+func (f tripleBucketFilter) prefixCount() int                { return 0 }
+func (p *searchPlan) tripleBucketFilter() tripleBucketFilter { return nil }
+func (p *searchPlan) makeTripleBucketFilter() bool           { return false }
+func tripleBucketSkipBytes(s string, at int, _ tripleBucketFilter, shufti *tripleShuftiFilter) int {
+	return tripleShuftiSkipBytes(s, at, shufti)
+}
+
 func rawByteMultiAnchorSkipBytes(s string, at int, filter *rawByteMultiAnchorFilter) (int, byte) {
 	return rawByteMultiAnchorSkipScalar(s, at, filter)
 }

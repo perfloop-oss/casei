@@ -81,6 +81,7 @@ func filterSkip64(ptr *byte, n int, filter *rootFilter) int
 func tripleSkip32(ptr *byte, n int, filter *tripleFilter) int
 func tripleSkip64(ptr *byte, n int, filter *tripleFilter) int
 func tripleShuftiSkip64(ptr *byte, n int, filter *tripleShuftiFilter) int
+func tripleBucketSkip64(ptr *byte, n int, bucket *byte, shufti *tripleShuftiFilter) int
 func rawByteMultiAnchorSkip64(ptr *byte, n int, filter *rawByteMultiAnchorFilter) (ret int, tags byte)
 func asciiPairAnchorSkip64(ptr *byte, n int, filter *asciiPairAnchorFilter) int
 func asciiPairAnchorVBMISkip64(ptr *byte, n int, filter *asciiPairVBMIAnchorFilter) int
