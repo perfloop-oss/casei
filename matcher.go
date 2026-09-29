@@ -71,6 +71,9 @@ func (m *Matcher) Each(haystack string, yield func(match Match, width int) bool)
 	if m.plan.empty < 0 && m.plan.rawByteMulti.usable() {
 		return m.plan.eachRawByteFixedAnchored(haystack, yield)
 	}
+	if bucket, ok := m.plan.rootBucketEachFilter(haystack); ok {
+		return m.plan.eachRootBucket(haystack, bucket, yield)
+	}
 	if m.plan.patternCount == 1 && m.plan.maxUnits > 0 && len(haystack) >= 4096 &&
 		!m.plan.opaqueContinuation && !m.plan.asciiRun && !m.plan.asciiPair.usable() &&
 		!m.plan.asciiStaticAnchor && !m.plan.asciiByteAnchor && m.plan.asciiProbe.usable() {
