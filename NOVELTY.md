@@ -1933,6 +1933,42 @@ no full-field native saving after confirmation and prefix-recovery costs.
 Portable tests and fuzzing are correctness preflight only. The final source
 retains all other accepted contributions and the complete field contract.
 
+## Generic multi-pattern `Each` from existing root candidates
+
+The rejected screen compiled one fold-stable ASCII trigram and the complete
+set of possible source-byte widths before it for each literal. Three plan-owned
+tag tables screened one loaded block, and the existing fold-token trie would
+have confirmed each recovered start. This candidate-filter/confirm shape is
+known art: Teddy and FDR are catalogued in `CONTEXT.md` §1d, and the pinned
+[Vectorscan Teddy kernel](https://github.com/VectorCamp/vectorscan/blob/vectorscan/5.4.12/src/fdr/teddy.cpp#L197-L310)
+uses byte-class masks, shifted lanes, tags, and confirmation. The existing
+`rawByteMulti` enumerator in `raw_byte.go` is not the eligible route here: its
+compiler requires two-byte fold-orbit encodings, while these Rebar patterns
+are ASCII. The proposed combination would have been an application of known
+filters to the existing fold-token plan, not a new SIMD search engine.
+
+The temporary selector/schedule was not retained. A screen-only run with the
+actual compiled keys, full fixture, table setup, and tails exceeded the Case's
+field-time feasibility estimates; a first whole-`Each` prototype was slower
+than the suffix-control in scratch probes. These were exploratory, unpaired
+observations, not a field-position result. They reject only that
+selector/schedule as a field-leading candidate, not other tag designs or the
+Case's partial-speedup outcome.
+
+The retained route adds no filter table or second matcher. It uses the existing
+complete root-triple plan and its bucket/Shufti candidate screen, then replays
+one source-order candidate at a time through the same fold-token trie and
+resumes at the exact non-overlapping end. For the target plans, complete triple
+coverage leaves `p.filter` empty, so the bucket/Shufti selection—not a second
+independent root-filter call—is the old root screen. The change claims only a
+guarded whole-Rebar improvement over the base; it does not claim field
+leadership or a new SIMD filter.
+
+The retained route is falsified by any mismatch in non-overlapping order,
+lowest-ID tie, returned source width, malformed-byte behavior, early stop, or
+feature-off fallback, or by an official full-count loss on either target or a
+declared guard regression.
+
 ## Provenance
 
 This contribution contains novelty assessments and implementation provenance
