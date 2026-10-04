@@ -1565,18 +1565,35 @@ The closest mechanical source is Vectorscan 5.4.12 Teddy/FDR
 and [`src/nfa/shufticompile.cpp`](https://github.com/VectorCamp/vectorscan/blob/vectorscan/5.4.12/src/nfa/shufticompile.cpp)),
 whose compiled byte classes, shifted masks, and bounded shared Shufti buckets
 screen candidates before confirmation. `CONTEXT.md` §§3 and 8 already list
-Teddy/Shufti as prior art. This package reimplements the technique from its own
-fold-token plan; no Vectorscan code is imported, linked, embedded, or copied.
-The composition is a plan-owned ASCII prefilter with casei's existing
-simple-fold decoder, ordering, source widths, and high-byte/portable fallback,
-not a second matcher or new Unicode recognizer. This is a provenance entry, not
-a novelty claim for four-byte buckets, shared Shufti slots, or Teddy-style table
-lookup. The package-specific result under evaluation is a single plan route
-that uses the bucket only on proven-ASCII blocks and retains the exact casei
-confirmation/fallback contract; neither the bucket alone nor the old Shufti
-transition supplies that combination. If the paired Rebar targets do not
-improve without violating the Russian, single-literal, or BenchmarkBar guards,
-the composition has no measured performance result.
+Teddy/Shufti as prior art. This package reimplements the table technique from
+its own fold-token plan; no Vectorscan code is imported, linked, embedded, or
+copied.
+
+The accepted-base `REBAR.md` table also identifies pinned rust/regex as the
+leader for `imported/sherlock/name-alt3-casei` on Sapphire Rapids. The row's
+seven ordered literals become captured branches in `arena/rure/rure.go`; the
+Arena pins rure 0.2.5, regex 1.13.1, and regex-automata 0.4.18. The
+regex-automata meta compiler rejects its direct exact-literal bypass for
+explicit captures and reserves its Aho-Corasick alternation bypass for large
+uncaptured literal sets. It still extracts HIR prefixes for a prefilter that
+feeds the regex core. A compile using the pinned byte-mode, Unicode-enabled,
+leftmost-first configuration and this exact pattern selects a Teddy prefilter;
+the regex core remains responsible for branch captures. This is a compile-route
+observation, not a timing result. The relevant sources are
+[`meta/strategy.rs`](https://docs.rs/crate/regex-automata/0.4.18/source/src/meta/strategy.rs),
+[`meta/literal.rs`](https://docs.rs/crate/regex-automata/0.4.18/source/src/meta/literal.rs),
+and [`util/prefilter/mod.rs`](https://docs.rs/crate/regex-automata/0.4.18/source/src/util/prefilter/mod.rs).
+
+The useful transfer from that leader is a vector literal screen followed by
+exact match confirmation. This change adapts that boundary to casei's shared
+plan: four-position buckets screen proven-ASCII blocks, shared Shufti covers
+high-byte blocks, and the existing plan retains ordering, source widths, and
+fold semantics. The route is not a regex engine or a copied Teddy kernel. This
+is provenance, not a novelty claim for four-byte buckets, shared Shufti slots,
+or Teddy-style lookup. The plan-specific result remains under evaluation; if
+the paired Rebar target does not improve without violating the Russian,
+single-literal, or BenchmarkBar guards, this composition has no measured
+performance result.
 
 The falsifier is direct: the trie/table model and assembly model must agree at
 every tested block boundary, and fast/disabled paths must match Shufti results,
