@@ -1547,26 +1547,36 @@ ASCII trie prefix; four 128-entry tables encode which prefix bits accept each
 byte at each position. A three-unit terminal leaves position four unrestricted.
 The AVX-512 VBMI block kernel permutes four overlapping byte vectors through
 those tables and intersects the slot masks over 64 starts. It uses that
-schedule only after all 67 bytes needed by the overlapping windows prove ASCII;
-high-byte blocks use the existing Shufti projection, and the shared plan
-confirms every stop.
+schedule only after all 67 bytes needed by the overlapping windows prove ASCII.
+
+For complete generic plans with six to eight patterns and more than eight raw
+triple forms, the exact one-bit-per-form Shufti projection does not fit. Only on
+the existing amd64 VBMI path, and outside the raw-byte multi-anchor route,
+compilation first collects at most eight ASCII trie prefixes. It then
+conservatively merges the stored forms into the existing eight Shufti slots for
+high-byte blocks. Bytes accepted at each triple position are unioned within a
+shared slot, which can add candidates but cannot remove a stored fold form.
+Prefix overflow or any ineligible plan installs neither the new shared
+projection nor the bucket. The shared plan remains the match authority.
 
 The closest mechanical source is Vectorscan 5.4.12 Teddy/FDR
 ([`src/fdr/teddy.cpp`](https://github.com/VectorCamp/vectorscan/blob/vectorscan/5.4.12/src/fdr/teddy.cpp),
-[`src/fdr/fdr.c`](https://github.com/VectorCamp/vectorscan/blob/vectorscan/5.4.12/src/fdr/fdr.c)),
-whose compiled byte classes and shifted masks screen candidate starts before
-confirmation. `CONTEXT.md` §§3 and 8 already list Teddy/Shufti as prior art.
-This package reimplements the technique; no Vectorscan code is imported,
-linked, embedded, or copied. The composition is a plan-owned ASCII prefilter
-with casei's existing simple-fold decoder, ordering, source widths, and
-high-byte/portable fallback, not a second matcher or new Unicode recognizer.
-This is a provenance entry, not a novelty claim for four-byte buckets or
-Teddy-style table lookup. The package-specific result under evaluation is a
-single plan route that uses the bucket only on proven-ASCII blocks and retains
-the exact casei confirmation/fallback contract; neither the bucket alone nor
-the old Shufti transition supplies that combination. If the paired Rebar targets
-do not improve without violating the Russian, single-literal, or BenchmarkBar
-guards, the composition has no measured performance result.
+[`src/fdr/fdr.c`](https://github.com/VectorCamp/vectorscan/blob/vectorscan/5.4.12/src/fdr/fdr.c),
+and [`src/nfa/shufticompile.cpp`](https://github.com/VectorCamp/vectorscan/blob/vectorscan/5.4.12/src/nfa/shufticompile.cpp)),
+whose compiled byte classes, shifted masks, and bounded shared Shufti buckets
+screen candidates before confirmation. `CONTEXT.md` §§3 and 8 already list
+Teddy/Shufti as prior art. This package reimplements the technique from its own
+fold-token plan; no Vectorscan code is imported, linked, embedded, or copied.
+The composition is a plan-owned ASCII prefilter with casei's existing
+simple-fold decoder, ordering, source widths, and high-byte/portable fallback,
+not a second matcher or new Unicode recognizer. This is a provenance entry, not
+a novelty claim for four-byte buckets, shared Shufti slots, or Teddy-style table
+lookup. The package-specific result under evaluation is a single plan route
+that uses the bucket only on proven-ASCII blocks and retains the exact casei
+confirmation/fallback contract; neither the bucket alone nor the old Shufti
+transition supplies that combination. If the paired Rebar targets do not
+improve without violating the Russian, single-literal, or BenchmarkBar guards,
+the composition has no measured performance result.
 
 The falsifier is direct: the trie/table model and assembly model must agree at
 every tested block boundary, and fast/disabled paths must match Shufti results,
