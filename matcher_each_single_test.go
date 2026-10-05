@@ -4,7 +4,70 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
+
+func TestASCIIOnlyMatchWidthUsesPlanTokens(t *testing.T) {
+	literal := make([]byte, utf8.RuneSelf)
+	for i := range literal {
+		literal[i] = byte(i)
+	}
+	plan := newSearchPlan([]string{string(literal)})
+	if !plan.asciiOnly || !plan.asciiVerifyTokens || len(plan.singleTokens) != len(literal) {
+		t.Fatalf("ASCII token plan = asciiOnly:%t verify:%t tokens:%d; want an all-ASCII token-verified literal", plan.asciiOnly, plan.asciiVerifyTokens, len(plan.singleTokens))
+	}
+
+	candidate := append([]byte(nil), literal...)
+	for pos := range literal {
+		for value := range utf8.RuneSelf {
+			candidate[pos] = byte(value)
+			haystack := string(candidate)
+			width, fast := plan.asciiOnlyMatchWidth(haystack, 0)
+			want := plan.matchesSingleAt(haystack, 0)
+			if fast != want {
+				t.Fatalf("ASCII byte %02x at pattern byte %d: fast match %t, token plan match %t", value, pos, fast, want)
+			}
+			if fast && width != len(literal) {
+				t.Fatalf("ASCII byte %02x at pattern byte %d: width %d, want %d", value, pos, width, len(literal))
+			}
+		}
+		candidate[pos] = literal[pos]
+	}
+}
+
+func TestASCIIOnlyMatchWidthBoundsAndUnicodeFallback(t *testing.T) {
+	matcher := NewMatcher([]string{"Sherlock Holmes"})
+	plan := matcher.plan
+	for end := 0; end < len(plan.asciiNeedle); end++ {
+		if _, ok := plan.asciiOnlyMatchWidth(plan.asciiNeedle[:end], 0); ok {
+			t.Fatalf("truncated ASCII window of %d bytes was confirmed", end)
+		}
+	}
+	width, ok := plan.asciiOnlyMatchWidth("x"+plan.asciiNeedle, 1)
+	if !ok || width != len(plan.asciiNeedle) {
+		t.Fatalf("complete unaligned ASCII window = (%d,%t), want (%d,true)", width, ok, len(plan.asciiNeedle))
+	}
+
+	unicodePlan := newSearchPlan([]string{"abcK"})
+	if !unicodePlan.asciiVerifyTokens || unicodePlan.asciiOnly {
+		t.Fatalf("Unicode token plan = verify:%t asciiOnly:%t", unicodePlan.asciiVerifyTokens, unicodePlan.asciiOnly)
+	}
+	// asciiPatternAt visits rune starts, so the leading bytes alone can appear
+	// to confirm a Unicode pattern. The token matcher must own this candidate.
+	if !unicodePlan.asciiOnlyPatternAt("abc\xe2xx", 0, unicodePlan.asciiNeedle) {
+		t.Fatal("fixture no longer exposes the non-ASCII pattern alias")
+	}
+	if _, ok := unicodePlan.asciiOnlyMatchWidth("abc\xe2xx", 0); ok {
+		t.Fatal("non-ASCII pattern was accepted by the ASCII width check")
+	}
+
+	input := strings.Repeat("x", 5000) + "abc\xe2xx"
+	got := collectASCIIInteriorEach(NewMatcher([]string{"abcK"}), input)
+	want := refEach(input, []string{"abcK"})
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Each(%x) = %+v, want Unicode fallback %+v", input, got, want)
+	}
+}
 
 func TestMatcherEachASCIIProbeWidthChangingFolds(t *testing.T) {
 	patterns := []string{"Sherlock Holmes"}

@@ -145,14 +145,22 @@ func (m *Matcher) eachASCIIProbe(haystack string, yield func(Match, int) bool) b
 			at++
 			continue
 		}
-		if !p.asciiAnchorMatches(haystack, start) {
-			at++
-			continue
-		}
-
 		width := len(p.asciiNeedle)
 		if p.asciiVerifyTokens {
-			width = matcherMatchEnd(haystack, start, p.maxUnits) - start
+			asciiMatch := false
+			if p.asciiOnly {
+				width, asciiMatch = p.asciiOnlyMatchWidth(haystack, start)
+			}
+			if !asciiMatch {
+				if !p.asciiAnchorMatches(haystack, start) {
+					at++
+					continue
+				}
+				width = matcherMatchEnd(haystack, start, p.maxUnits) - start
+			}
+		} else if !p.asciiAnchorMatches(haystack, start) {
+			at++
+			continue
 		}
 		if !yield(Match{Pattern: 0, Start: start}, width) {
 			return false
@@ -161,6 +169,20 @@ func (m *Matcher) eachASCIIProbe(haystack string, yield func(Match, int) bool) b
 		at = nextStart
 	}
 	return true
+}
+
+// asciiOnlyMatchWidth accepts only a complete ASCII rendering of a token-verified
+// ASCII singleton. A failed check is inconclusive, so Each keeps the decoded
+// confirmer and endpoint recovery for every other candidate.
+func (p *searchPlan) asciiOnlyMatchWidth(haystack string, at int) (int, bool) {
+	if !p.asciiVerifyTokens || !p.asciiOnly || at < 0 || at > len(haystack) {
+		return 0, false
+	}
+	width := len(p.asciiNeedle)
+	if width > len(haystack)-at || !p.asciiOnlyPatternAt(haystack, at, p.asciiNeedle) {
+		return 0, false
+	}
+	return width, true
 }
 
 func matcherMatchEnd(haystack string, start, units int) int {
