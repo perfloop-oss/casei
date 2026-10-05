@@ -30,7 +30,8 @@ type searchPlan struct {
 	pairSecond bool
 	triples    tripleFilter
 	// tripleRoots marks covered trie tokens during compilation. An eligible
-	// complete plan reuses this slice for its plan-owned bucket table afterward.
+	// complete plan reuses this slice for its bucket table and optional
+	// confirmation data afterward.
 	tripleRoots          []byte
 	triplesComplete      bool
 	asciiTriples         tripleFilter
@@ -969,7 +970,7 @@ func newSearchPlan(patterns []string) *searchPlan {
 	}
 	p.makeRawByteTokenPlan(patterns)
 	if p.patternCount > 1 && p.triplesComplete && !p.rawByteMulti.usable() {
-		p.makeTripleBucketFilter()
+		p.makeTripleBucketFilter(patterns)
 	}
 	return p
 }

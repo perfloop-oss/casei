@@ -244,7 +244,7 @@ func tripleShuftiSkipBytes(s string, at int, filter *tripleShuftiFilter) int {
 func (f tripleBucketFilter) usable() bool                    { return false }
 func (f tripleBucketFilter) prefixCount() int                { return 0 }
 func (p *searchPlan) tripleBucketFilter() tripleBucketFilter { return nil }
-func (p *searchPlan) makeTripleBucketFilter() bool           { return false }
+func (p *searchPlan) makeTripleBucketFilter([]string) bool   { return false }
 func tripleBucketSkipBytes(s string, at int, _ tripleBucketFilter, shufti *tripleShuftiFilter) int {
 	return tripleShuftiSkipBytes(s, at, shufti)
 }

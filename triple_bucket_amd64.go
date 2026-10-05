@@ -59,8 +59,9 @@ func addTripleBucketPrefix(prefixes *[tripleShuftiSlots]tripleBucketPrefix, n *i
 // unconstrained; any live fourth-unit prefix is retained even when later units
 // require Unicode. The block kernel uses this table only when the four
 // overlapping input vectors are all ASCII; other blocks use the Shufti
-// projection. The shared plan remains the only match authority.
-func (p *searchPlan) makeTripleBucketFilter() bool {
+// projection. Eligible plans may append bounded word confirmations to this
+// same plan-owned storage; the shared plan remains the only match authority.
+func (p *searchPlan) makeTripleBucketFilter(patterns []string) bool {
 	if p.patternCount <= 1 || p.rootKind != rootGeneric || p.rawByteMulti.usable() ||
 		!p.triples.shufti.usable() || !asciiPairVBMIEnabled() {
 		return false
@@ -109,8 +110,17 @@ func (p *searchPlan) makeTripleBucketFilter() bool {
 		return false
 	}
 
-	storage := make([]byte, tripleBucketFilterBytes)
-	out := tripleBucketFilter(storage)
+	var certs rootASCIIWordCerts
+	hasCerts := false
+	if p.patternCount >= 4 && p.patternCount <= rootASCIIWordMaxPatterns {
+		certs, hasCerts = makeRootASCIIWordCerts(p, patterns)
+	}
+	certBytes := 0
+	if hasCerts {
+		certBytes = rootASCIIWordCertBytes(certs.count)
+	}
+	storage := make([]byte, tripleBucketFilterBytes+certBytes)
+	out := tripleBucketFilter(storage[:tripleBucketFilterBytes])
 	for slot := 0; slot < n; slot++ {
 		bit := byte(1 << uint(slot))
 		for position := 0; position < int(prefixes[slot].length); position++ {
@@ -128,6 +138,9 @@ func (p *searchPlan) makeTripleBucketFilter() bool {
 	}
 	out[tripleBucketTableBytes] = byte(n)
 	out[tripleBucketFilterBytes-1] = tripleBucketValidMarker
+	if hasCerts {
+		certs.write(storage[tripleBucketFilterBytes:])
+	}
 	p.tripleRoots = storage
 	return true
 }
