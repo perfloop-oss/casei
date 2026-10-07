@@ -587,6 +587,7 @@ func FuzzMatcher(f *testing.F) {
 	f.Add("Hello World", "world", "mars", "")
 	f.Add("xxKelvin scale", "scale", "kelvin", "ſecret")
 	f.Add("доктор Ватсон", "ватсон", "ШЕРЛОК", "z")
+	f.Add(strings.Repeat("x", 64)+"ſherlocK Holmes", "Sherlock", "Holmes", "Watson")
 	f.Fuzz(func(t *testing.T, haystack, p0, p1, p2 string) {
 		pats := []string{p0, p1, p2}
 		matcher := NewMatcher(pats)

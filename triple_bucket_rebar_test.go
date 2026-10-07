@@ -131,6 +131,11 @@ func TestTripleBucketRebarEvidence(t *testing.T) {
 			if matcher.plan.rawByteMulti.usable() || !matcher.plan.tripleBucketFilter().usable() {
 				t.Fatalf("%s: expected the plan-owned bucket route", row.id)
 			}
+			if row.id == "imported/sherlock/name-alt5-casei" {
+				if _, ok := matcher.plan.rootBucketEachFilter(string(haystack)); !ok {
+					t.Fatal("three-name Rebar row did not select the root Each iterator")
+				}
+			}
 			shufti := *matcher.plan
 			shufti.tripleRoots = nil
 			bucketStops := tripleBucketRebarStops(string(haystack), matcher.plan)

@@ -187,11 +187,11 @@ func matchRootASCIIWordCertData(data []byte, haystack string, start int) (match 
 }
 
 // rootBucketEachFilter limits the alternate iterator to complete generic
-// multi-literal root plans with conservative Shufti coverage and a compiled
-// bucket. Covered roots make p.filter unusable for this shape; the existing
-// bucket/Shufti wrapper is the active candidate screen.
+// three-to-five-literal root plans with conservative Shufti coverage and a
+// compiled bucket. Covered roots make p.filter unusable for this shape; the
+// existing bucket/Shufti wrapper is the active candidate screen.
 func (p *searchPlan) rootBucketEachFilter(haystack string) (tripleBucketFilter, bool) {
-	if p.empty >= 0 || p.patternCount < 4 || p.patternCount > 5 || p.opaqueContinuation ||
+	if p.empty >= 0 || p.patternCount < 3 || p.patternCount > 5 || p.opaqueContinuation ||
 		p.rootKind != rootGeneric || p.rawByteMulti.usable() || !p.triplesComplete ||
 		!p.triples.shufti.usable() || !asciiPairVBMIEnabled() || len(haystack) < rootBucketEachMinBytes {
 		return nil, false

@@ -12,15 +12,16 @@ var rootBucketEnglishPatterns = []string{
 	"Sherlock Holmes", "John Watson", "Irene Adler", "Inspector Lestrade", "Professor Moriarty",
 }
 
+var rootBucketSherlockPatterns = []string{"Sherlock", "Holmes", "Watson"}
+
 var rootBucketLeipzigPatterns = []string{"Tom", "Sawyer", "Huckleberry", "Finn"}
 
 var rootBucketRussianPatterns = []string{
 	"Шерлок Холмс", "Джон Уотсон", "Ирен Адлер", "инспектор Лестрейд", "профессор Мориарти",
 }
 
-func collectRootBucketEach(matcher *Matcher, haystack string) ([]refEachResult, bool) {
+func collectRootBucketEach(matcher *Matcher, haystack string, bucket tripleBucketFilter) ([]refEachResult, bool) {
 	var results []refEachResult
-	bucket := matcher.plan.tripleBucketFilter()
 	complete := matcher.plan.eachRootBucket(haystack, bucket, func(match Match, width int) bool {
 		results = append(results, refEachResult{match: match, width: width})
 		return true
@@ -43,31 +44,36 @@ func rootASCIIWordTestBucket(certs rootASCIIWordCerts) tripleBucketFilter {
 	return bucket
 }
 
-func checkRootBucketEach(t *testing.T, matcher *Matcher, haystack string) {
+func hasCompleteRootBucketEachScreen(plan *searchPlan) bool {
+	return plan != nil && plan.empty < 0 && plan.patternCount >= 3 && plan.patternCount <= 5 &&
+		!plan.opaqueContinuation && plan.rootKind == rootGeneric && !plan.rawByteMulti.usable() &&
+		plan.triplesComplete && plan.triples.shufti.usable()
+}
+
+func checkPublicEach(t *testing.T, matcher *Matcher, haystack string, want []refEachResult) {
 	t.Helper()
-	want := refEach(haystack, matcher.patterns)
-	for _, route := range []struct {
-		name string
-		call func(*Matcher, string) ([]refEachResult, bool)
-	}{
-		{"root iterator", collectRootBucketEach},
-		{"public Each", func(m *Matcher, h string) ([]refEachResult, bool) {
-			var results []refEachResult
-			complete := m.Each(h, func(match Match, width int) bool {
-				results = append(results, refEachResult{match: match, width: width})
-				return true
-			})
-			return results, complete
-		}},
-	} {
-		got, complete := route.call(matcher, haystack)
-		if !complete || !reflect.DeepEqual(got, want) {
-			t.Fatalf("%s Each(%x) = %+v complete=%t, want %+v", route.name, haystack, got, complete, want)
-		}
+	var got []refEachResult
+	complete := matcher.Each(haystack, func(match Match, width int) bool {
+		got = append(got, refEachResult{match: match, width: width})
+		return true
+	})
+	if !complete || !reflect.DeepEqual(got, want) {
+		t.Fatalf("public Each(%x) = %+v complete=%t, want %+v", haystack, got, complete, want)
 	}
 }
 
+func checkRootBucketEach(t *testing.T, matcher *Matcher, haystack string) {
+	t.Helper()
+	want := refEach(haystack, matcher.patterns)
+	got, complete := collectRootBucketEach(matcher, haystack, matcher.plan.tripleBucketFilter())
+	if !complete || !reflect.DeepEqual(got, want) {
+		t.Fatalf("root iterator Each(%x) = %+v complete=%t, want %+v", haystack, got, complete, want)
+	}
+	checkPublicEach(t, matcher, haystack, want)
+}
+
 func TestEachRootBucketMatchesReference(t *testing.T) {
+	threeTiePatterns := []string{"Sherlock", "Sherlock Holmes", "Watson"}
 	tiePatterns := []string{"Sherlock Holmes", "Sherlock", "Sherlock", "John Watson", "Irene Adler"}
 	shortTiePatterns := []string{"Sherlock", "Sherlock Holmes", "Sherlock", "John Watson", "Irene Adler"}
 	cases := []struct {
@@ -81,6 +87,26 @@ func TestEachRootBucketMatchesReference(t *testing.T) {
 			haystack: strings.Repeat("x", 64) + "ſherlocK Holmes; JOHN WATSON; Irene Adler; INSPECTOR LESTRADE; Professor Moriarty;",
 		},
 		{
+			name:     "three-name roots include width-changing folds",
+			patterns: rootBucketSherlockPatterns,
+			haystack: strings.Repeat("x", 64) + "ſherlock; hOLMES; Watson!",
+		},
+		{
+			name:     "three-name match contains long-s and Kelvin folds",
+			patterns: rootBucketSherlockPatterns,
+			haystack: strings.Repeat("x", 64) + "ſherlocK; Holmeſ; Watson!",
+		},
+		{
+			name:     "three-name candidate reaches the haystack tail",
+			patterns: rootBucketSherlockPatterns,
+			haystack: strings.Repeat("x", 61) + "Watson",
+		},
+		{
+			name:     "three-pattern lowest-ID prefix tie keeps its width",
+			patterns: threeTiePatterns,
+			haystack: strings.Repeat("x", 64) + "Sherlock Holmes; Watson",
+		},
+		{
 			name:     "source-order candidates and non-overlap",
 			patterns: rootBucketEnglishPatterns,
 			haystack: strings.Repeat("x", 97) + "John Watson; " + strings.Repeat("x", 13) + "Sherlock Holmes; Irene Adler;",
@@ -89,6 +115,11 @@ func TestEachRootBucketMatchesReference(t *testing.T) {
 			name:     "malformed bytes before and through candidates",
 			patterns: rootBucketEnglishPatterns,
 			haystack: string(append(append([]byte(strings.Repeat("x", 63)), 0xff, 0x80), []byte("ſherlocK Holmes and Professor Moriarty")...)),
+		},
+		{
+			name:     "three-name route across malformed bytes",
+			patterns: rootBucketSherlockPatterns,
+			haystack: string(append(append([]byte(strings.Repeat("x", 64)), 0xff, 0x80), []byte("HOLMES and Watson")...)),
 		},
 		{
 			name:     "Tom and Sawyer width-changing prefix",
@@ -124,12 +155,16 @@ func TestEachRootBucketMatchesReference(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			matcher := NewMatcher(tc.patterns)
-			if matcher.plan.patternCount < 4 || matcher.plan.patternCount > 5 ||
+			if matcher.plan.patternCount < 3 || matcher.plan.patternCount > 5 ||
 				matcher.plan.rootKind != rootGeneric || !matcher.plan.triplesComplete {
 				t.Fatalf("test plan does not own a complete generic root filter: patterns=%q root=%d complete=%t",
 					matcher.patterns, matcher.plan.rootKind, matcher.plan.triplesComplete)
 			}
-			checkRootBucketEach(t, matcher, tc.haystack)
+			if hasCompleteRootBucketEachScreen(matcher.plan) {
+				checkRootBucketEach(t, matcher, tc.haystack)
+			} else {
+				checkPublicEach(t, matcher, tc.haystack, refEach(tc.haystack, tc.patterns))
+			}
 
 			want := refEach(tc.haystack, tc.patterns)
 			calls := 0
@@ -286,13 +321,18 @@ func TestRootASCIIWordCertificatesRejectUnknownTokens(t *testing.T) {
 }
 
 func TestMatcherEachRootBucketEligibility(t *testing.T) {
-	if !asciiPairVBMIEnabled() {
-		t.Skip("AVX-512 VBMI bucket path is disabled")
-	}
-	for _, patterns := range [][]string{rootBucketEnglishPatterns, rootBucketLeipzigPatterns} {
+	patternSets := [][]string{rootBucketSherlockPatterns, rootBucketLeipzigPatterns, rootBucketEnglishPatterns}
+	for _, patterns := range patternSets {
 		plan := NewMatcher(patterns).plan
-		if rootASCIIWordCertData(plan.tripleBucketFilter()) == nil {
-			t.Fatalf("eligible plan did not compile root certificates for %q", patterns)
+		if !asciiPairVBMIEnabled() {
+			if _, ok := plan.rootBucketEachFilter(strings.Repeat("x", 1024)); ok {
+				t.Fatalf("feature-off plan selected the root iterator for %q", patterns)
+			}
+			continue
+		}
+		hasCerts := rootASCIIWordCertData(plan.tripleBucketFilter()) != nil
+		if wantCerts := len(patterns) >= 4; hasCerts != wantCerts {
+			t.Fatalf("root certificates = %t for %q, want %t", hasCerts, patterns, wantCerts)
 		}
 		if _, ok := plan.rootBucketEachFilter(strings.Repeat("x", rootBucketEachMinBytes-1)); ok {
 			t.Fatalf("short input selected the root iterator for %q", patterns)
@@ -301,8 +341,19 @@ func TestMatcherEachRootBucketEligibility(t *testing.T) {
 			t.Fatalf("eligible input did not select the root iterator for %q", patterns)
 		}
 	}
-	if _, ok := NewMatcher([]string{"Sherlock", "Holmes", "Watson"}).plan.rootBucketEachFilter(strings.Repeat("x", 1024)); ok {
-		t.Fatal("three-pattern guard unexpectedly selected the four/five-literal iterator")
+	if !asciiPairVBMIEnabled() {
+		matcher := NewMatcher(rootBucketSherlockPatterns)
+		checkRootBucketEach(t, matcher, strings.Repeat("x", 61)+"Watson")
+		return
+	}
+	sixPatterns := append(append([]string(nil), rootBucketEnglishPatterns...), "Mycroft Holmes")
+	sixPlan := NewMatcher(sixPatterns).plan
+	if sixPlan.patternCount != 6 || sixPlan.rootKind != rootGeneric || sixPlan.rawByteMulti.usable() ||
+		!sixPlan.triplesComplete || !sixPlan.triples.shufti.usable() || !sixPlan.tripleBucketFilter().usable() {
+		t.Fatal("six-pattern upper-bound plan does not satisfy the other root iterator gates")
+	}
+	if _, ok := sixPlan.rootBucketEachFilter(strings.Repeat("x", 1024)); ok {
+		t.Fatal("six-pattern plan exceeded the root iterator's existing upper bound")
 	}
 	russian := NewMatcher(rootBucketRussianPatterns).plan
 	if _, ok := russian.rootBucketEachFilter(strings.Repeat("x", 1024)); ok {
@@ -314,7 +365,7 @@ func TestMatcherEachRootBucketEligibility(t *testing.T) {
 }
 
 func TestEachRootBucketRandomDifferential(t *testing.T) {
-	sets := [][]string{rootBucketEnglishPatterns, rootBucketLeipzigPatterns}
+	sets := [][]string{rootBucketSherlockPatterns, rootBucketEnglishPatterns, rootBucketLeipzigPatterns}
 	rng := rand.New(rand.NewPCG(20260929, 0x726f6f74))
 	for _, patterns := range sets {
 		matcher := NewMatcher(patterns)
@@ -333,9 +384,11 @@ func TestEachRootBucketRandomDifferential(t *testing.T) {
 }
 
 func TestMatcherEachRootBucketThreshold(t *testing.T) {
-	matcher := NewMatcher(rootBucketEnglishPatterns)
-	for _, length := range []int{66, 67, 68, 127, 128, 129} {
-		haystack := strings.Repeat("x", length-3) + "ABC"
-		checkRootBucketEach(t, matcher, haystack)
+	for _, patterns := range [][]string{rootBucketSherlockPatterns, rootBucketEnglishPatterns} {
+		matcher := NewMatcher(patterns)
+		for _, length := range []int{66, 67, 68, 127, 128, 129} {
+			checkRootBucketEach(t, matcher, strings.Repeat("x", length-3)+"ABC")
+			checkRootBucketEach(t, matcher, strings.Repeat("x", length-len("Watson"))+"Watson")
+		}
 	}
 }
