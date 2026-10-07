@@ -148,7 +148,9 @@ change. A change lands on `master` when:
 2. a paired, order-alternating comparison against current `master` on the same
    host shows that the change speeds up the full operations it targets -- a
    Rebar row as `Matcher.Each` over its pinned haystack, or a `BenchmarkBar`
-   row -- and does not slow the guard rows it names;
+   row -- and does not slow the guard rows it names. A change that fixes a
+   section 8 defect needs no speedup: the same comparison shows that the rows
+   whose route it changes do not slow;
 3. no `BenchmarkBar` row that is below 1.0 on `master` reaches 1.0 on that
    host.
 
