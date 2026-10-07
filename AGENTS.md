@@ -127,7 +127,9 @@ Every row reports an `entrants` count and each entrant's dispatched vector
 width. A row with `entrants` below 2 was measured against the floor alone: say
 so when reporting it, and treat closing that gap as the work rather than the
 number as a win. An entrant reporting a narrower width than the machine offers
-is a handicapped opponent, not a beaten one.
+is a handicapped opponent, not a beaten one. Every pinned entrant that supports
+a row is timed and counts toward `x_vs_best`. Dispatch widths are diagnostics:
+an audit that cannot see an entrant's SIMD path never removes that entrant.
 
 A measurement with no competitor in it is not evidence of a position against
 the field. Two ways to produce one, both of which have happened here:

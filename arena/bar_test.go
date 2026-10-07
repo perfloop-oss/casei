@@ -98,7 +98,7 @@ func reportSingleDispatch(b *testing.B, s scenario) {
 	b.ReportMetric(0, "regexp_vector_bits")
 	b.ReportMetric(1, "pcre2_active")
 	b.ReportMetric(float64(pcre2jit.VectorBits()), "pcre2_vector_bits")
-	b.ReportMetric(boolMetric(rureBits == 256), "rure_active")
+	b.ReportMetric(1, "rure_active")
 	b.ReportMetric(float64(rureBits), "rure_vector_bits")
 	b.ReportMetric(1, "vectorscan_active")
 	b.ReportMetric(float64(vscan.VectorBits()), "vectorscan_vector_bits")
@@ -123,7 +123,7 @@ func reportMultiDispatch(b *testing.B, s multiScenario, candidateBits int, rure 
 	b.ReportMetric(0, "regexp_vector_bits")
 	b.ReportMetric(1, "pcre2_active")
 	b.ReportMetric(float64(pcre2jit.VectorBits()), "pcre2_vector_bits")
-	b.ReportMetric(boolMetric(rureBits == 256), "rure_active")
+	b.ReportMetric(1, "rure_active")
 	b.ReportMetric(float64(rureBits), "rure_vector_bits")
 	b.ReportMetric(1, "vectorscan_active")
 	b.ReportMetric(float64(vscan.VectorBits()), "vectorscan_vector_bits")
@@ -132,7 +132,7 @@ func reportMultiDispatch(b *testing.B, s multiScenario, candidateBits int, rure 
 	b.ReportMetric(float64(stringZillaBits), "stringzilla_vector_bits")
 	b.ReportMetric(0, "veloz_active")
 	b.ReportMetric(float64(velozBits), "veloz_vector_bits")
-	b.ReportMetric(boolMetric(!s.utf8 && rustBits == 256), "rustac_active")
+	b.ReportMetric(boolMetric(!s.utf8), "rustac_active")
 	b.ReportMetric(float64(rustBits), "rustac_vector_bits")
 	b.ReportMetric(boolMetric(!s.utf8), "go_ac_active")
 	b.ReportMetric(0, "go_ac_vector_bits")
@@ -151,14 +151,10 @@ func BenchmarkASCIIOnlyPartitionField(b *testing.B) {
 		best = ratio
 	}
 	competitors++
-	rure := rureSingles[s.needle]
-	rureRatio := pairedRatio(candidate, func() { sink = runSingleScenario(indexRure, s) })
-	if rure.VectorBits() == 256 {
-		if rureRatio > best {
-			best = rureRatio
-		}
-		competitors++
+	if ratio := pairedRatio(candidate, func() { sink = runSingleScenario(indexRure, s) }); ratio > best {
+		best = ratio
 	}
+	competitors++
 	if ratio := pairedRatio(candidate, func() { sink = runSingleScenario(indexVectorscan, s) }); ratio > best {
 		best = ratio
 	}
@@ -200,17 +196,14 @@ func BenchmarkBar(b *testing.B) {
 				best = ratio
 			}
 			competitors++
-			rure := rureSingles[s.needle]
-			rureRatio := pairedRatio(candidate, func() { sink = runSingleScenario(indexRure, s) })
-			// The Rust adapter records the backend reached by this exact query.
-			// A query that did not reach memchr AVX2 is diagnostic only; it must
-			// not race a target-width field entrant under a CPU-flag label.
-			if rure.VectorBits() == 256 {
-				if rureRatio > best {
-					best = rureRatio
-				}
-				competitors++
+			// Every pinned entrant that supports the row counts toward
+			// x_vs_best. The dispatch audit only sees memchr, while rust/regex
+			// often runs aho-corasick Teddy, so its width is a diagnostic and
+			// never removes the entrant.
+			if ratio := pairedRatio(candidate, func() { sink = runSingleScenario(indexRure, s) }); ratio > best {
+				best = ratio
 			}
+			competitors++
 			if ratio := pairedRatio(candidate, func() { sink = runSingleScenario(indexVectorscan, s) }); ratio > best {
 				best = ratio
 			}
@@ -253,13 +246,10 @@ func BenchmarkBar(b *testing.B) {
 			}
 			competitors++
 			rure := rureAlts[scenarioIndex]
-			rureRatio := pairedRatio(candidate, func() { _, _, matcherFound = rure.Find(s.haystack) })
-			if rure.VectorBits() == 256 {
-				if rureRatio > best {
-					best = rureRatio
-				}
-				competitors++
+			if ratio := pairedRatio(candidate, func() { _, _, matcherFound = rure.Find(s.haystack) }); ratio > best {
+				best = ratio
 			}
+			competitors++
 			vscan := vectorscanAlts[scenarioIndex]
 			if ratio := pairedRatio(candidate, func() { _, _, matcherFound = vscan.Find(s.haystack) }); ratio > best {
 				best = ratio
@@ -275,16 +265,12 @@ func BenchmarkBar(b *testing.B) {
 			supplemental := 0
 			rust := rustACAlts[scenarioIndex]
 			if !s.utf8 {
-				rustRatio := pairedRatio(candidate, func() { _, _, matcherFound = rust.Find(s.haystack) })
-				// The direct Rust DFA exposes the memchr backend reached by this
-				// exact prefilter query. Do not call an unobserved scalar/SSE path
-				// an AVX2 field entrant merely because this process has AVX2.
-				if rust.VectorBits() == 256 {
-					if rustRatio > best {
-						best = rustRatio
-					}
-					competitors++
+				// The memchr audit cannot see the packed Teddy path, so the
+				// reported width is a diagnostic and never removes the entrant.
+				if ratio := pairedRatio(candidate, func() { _, _, matcherFound = rust.Find(s.haystack) }); ratio > best {
+					best = ratio
 				}
+				competitors++
 
 				goAC := acBuild(s.patterns, true)
 				_ = pairedRatio(candidate, func() { _, matcherFound = acFirst(&goAC, s.haystack) })
