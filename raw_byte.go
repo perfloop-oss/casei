@@ -631,23 +631,8 @@ func (filter *rawByteMultiAnchorFilter) canAddConfirmationOffsets(offsets []uint
 }
 
 // tagsAt applies exact pair checks only for tags retained by the vector or
-// scalar table screen. It retains literal tags that own the primary,
-// fixed-displacement confirmation, and scalar guard simultaneously.
-func (anchor rawByteMultiAnchor) maxOffset() int {
-	max := 0
-	for i := 0; i < int(anchor.confirmN); i++ {
-		if offset := int(anchor.confirmOffset[i]); offset > max {
-			max = offset
-		}
-	}
-	for i := 0; i < int(anchor.guardN); i++ {
-		if offset := int(anchor.guardOffset[i]); offset > max {
-			max = offset
-		}
-	}
-	return max
-}
-
+// scalar table screen. It tests each fold-width alternative independently so an
+// unavailable longer offset cannot suppress an in-bounds spelling near EOF.
 func (filter *rawByteMultiAnchorFilter) tagsAt(s string, at int, candidates byte) byte {
 	if !filter.usable() {
 		return 0
@@ -657,7 +642,7 @@ func (filter *rawByteMultiAnchorFilter) tagsAt(s string, at int, candidates byte
 		i := bits.TrailingZeros8(candidates)
 		candidates &= candidates - 1
 		anchor := filter.anchors[i]
-		if anchor.startN == 0 || at+anchor.maxOffset()+1 >= len(s) || !anchor.primary.matches(s, at) {
+		if anchor.startN == 0 || !anchor.primary.matches(s, at) {
 			continue
 		}
 		confirmed := false
@@ -708,9 +693,13 @@ func rawByteMultiAnchorSkipScalar(s string, at int, filter *rawByteMultiAnchorFi
 
 // rawByteMatchAt confirms only an anchored start. It retains the same raw
 // two-byte map and decoded fallback as findFiltered, but does not let a later
-// root found through a failure link impersonate a match at start.
+// root found through a failure link impersonate a match at start. It keeps the
+// lowest-ID terminal across different end positions and saves that terminal's
+// width, because a shorter higher-ID prefix can complete first.
 func (p *searchPlan) rawByteMatchAt(haystack string, start int) (Match, int, bool) {
 	state, at := 0, start
+	best := Match{Pattern: -1, Start: start}
+	bestWidth := 0
 	for units := 1; units <= p.maxUnits && at < len(haystack); units++ {
 		next, size, raw := p.rawByteAdvance(haystack, at, state)
 		if !raw {
@@ -720,13 +709,22 @@ func (p *searchPlan) rawByteMatchAt(haystack string, start int) (Match, int, boo
 		state = next
 		at += size
 		if output := p.nodes[state].output; output.pattern >= 0 && output.units == units {
-			return Match{Pattern: output.pattern, Start: start}, at - start, true
+			if best.Pattern < 0 || output.pattern < best.Pattern {
+				best = Match{Pattern: output.pattern, Start: start}
+				bestWidth = at - start
+			}
+			if best.Pattern == 0 || len(p.nodes[state].edges) == 0 {
+				return best, bestWidth, true
+			}
 		}
 		if state == 0 {
-			return Match{}, 0, false
+			break
 		}
 	}
-	return Match{}, 0, false
+	if best.Pattern < 0 {
+		return Match{}, 0, false
+	}
+	return best, bestWidth, true
 }
 
 // findRawByteFixedAnchored is the first-result specialization of the same
@@ -766,7 +764,8 @@ func (p *searchPlan) findRawByteOrigin(haystack string) (Match, bool) {
 // eachRawByteFixedAnchored enumerates with one shared tagged interior-pair
 // scan. The table only nominates starts; exact pair checks and raw-plan replay
 // keep Unicode folding, malformed bytes, leftmost order, and lowest-ID ties in
-// the existing state machine.
+// the existing state machine. When lookahead reaches EOF with a pending match,
+// it resumes from that match's end to find later non-overlapping results.
 func (p *searchPlan) eachRawByteFixedAnchored(haystack string, yield func(Match, int) bool) bool {
 	filter := &p.rawByteMulti
 	if !filter.usable() {
@@ -785,40 +784,44 @@ func (p *searchPlan) eachRawByteFixedAnchored(haystack string, yield func(Match,
 		return true
 	}
 
-	for at+1 < len(haystack) {
-		if best.Pattern >= 0 && at > best.Start+int(filter.maxOffset) {
-			if !emit() {
-				return false
+	for {
+		for at+1 < len(haystack) {
+			if best.Pattern >= 0 && at > best.Start+int(filter.maxOffset) {
+				if !emit() {
+					return false
+				}
+				continue
 			}
-			continue
-		}
-		skipped, candidates := rawByteMultiAnchorSkipBytes(haystack, at, filter)
-		at += skipped
-		if at+1 >= len(haystack) {
-			break
-		}
-		for tags := filter.tagsAt(haystack, at, candidates); tags != 0; tags &= tags - 1 {
-			patternID := bits.TrailingZeros8(tags)
-			anchor := filter.anchors[patternID]
-			for i := 0; i < int(anchor.startN); i++ {
-				start := at - int(anchor.starts[i])
-				if start < from || best.Pattern >= 0 && start > best.Start {
-					continue
-				}
-				match, width, ok := p.rawByteMatchAt(haystack, start)
-				if !ok || best.Pattern >= 0 && match.Start > best.Start {
-					continue
-				}
-				if best.Pattern < 0 || match.Start < best.Start ||
-					match.Start == best.Start && match.Pattern < best.Pattern {
-					best, bestEnd = match, match.Start+width
+			skipped, candidates := rawByteMultiAnchorSkipBytes(haystack, at, filter)
+			at += skipped
+			if at+1 >= len(haystack) {
+				break
+			}
+			for tags := filter.tagsAt(haystack, at, candidates); tags != 0; tags &= tags - 1 {
+				patternID := bits.TrailingZeros8(tags)
+				anchor := filter.anchors[patternID]
+				for i := 0; i < int(anchor.startN); i++ {
+					start := at - int(anchor.starts[i])
+					if start < from || best.Pattern >= 0 && start > best.Start {
+						continue
+					}
+					match, width, ok := p.rawByteMatchAt(haystack, start)
+					if !ok || best.Pattern >= 0 && match.Start > best.Start {
+						continue
+					}
+					if best.Pattern < 0 || match.Start < best.Start ||
+						match.Start == best.Start && match.Pattern < best.Pattern {
+						best, bestEnd = match, match.Start+width
+					}
 				}
 			}
+			at++
 		}
-		at++
+		if best.Pattern < 0 {
+			return true
+		}
+		if !emit() {
+			return false
+		}
 	}
-	if best.Pattern >= 0 {
-		return yield(best, bestEnd-best.Start)
-	}
-	return true
 }
