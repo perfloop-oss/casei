@@ -267,8 +267,9 @@ Removed experiments and their falsifiers live in [`NOVELTY.md`](NOVELTY.md).
 8. The active publication target extends that gate to all 18 representable
    Rebar rows. The current checked-in result is 9/18 on each host.
 
-The current evidence is in [`audit/acceptance/`](audit/acceptance/README.md)
-and [`audit/rebar/`](audit/rebar/README.md).
+The Rebar evidence is in [`audit/rebar/`](audit/rebar/README.md). The
+36-row receipts in [`audit/acceptance/`](audit/acceptance/README.md) predate the
+rule that every pinned entrant counts, so they do not meet gate 6.
 
 ## Limits
 

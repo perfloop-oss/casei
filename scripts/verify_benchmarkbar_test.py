@@ -104,6 +104,28 @@ class VerifyBenchmarkBarTest(unittest.TestCase):
         with self.assertRaisesRegex(verify.VerificationError, "rure_active"):
             self.verify_text(transcript(rure_active=0, rure_bits=0))
 
+    def test_rejects_dropped_rure_on_single_row(self):
+        text = "".join(
+            row(name, rure_active=0, rure_bits=0)
+            if name.startswith("single/")
+            else row(name)
+            for name in sorted(verify.REQUIRED_ROWS)
+            for _ in range(3)
+        )
+        with self.assertRaisesRegex(verify.VerificationError, "rure_active"):
+            self.verify_text(text)
+
+    def test_rejects_rustac_on_utf8_multi_row(self):
+        text = "".join(
+            row(name, rustac_active=1, rustac_bits=256)
+            if name.startswith("multi/") and verify.is_utf8_row(name)
+            else row(name)
+            for name in sorted(verify.REQUIRED_ROWS)
+            for _ in range(3)
+        )
+        with self.assertRaisesRegex(verify.VerificationError, "rustac_active"):
+            self.verify_text(text)
+
     def test_rure_width_is_diagnostic(self):
         summary = self.verify_text(transcript(rure_bits=0))
         self.assertIn("PASS", summary)
