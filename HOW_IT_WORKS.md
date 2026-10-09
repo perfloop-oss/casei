@@ -123,7 +123,7 @@ one-per-cycle throughput on Ice Lake. Its current uops.info catalog has no
 Sapphire Rapids column, so the instruction table is used only to explain the
 Ice Lake schedule. Eight independent compares give the core work while earlier
 masks are in flight. The Sapphire Rapids result comes from direct execution and
-the complete field measurements.
+the arena field measurements.
 
 The tagged multi-anchor kernel uses the same idea with `VPERMB` tables. Its
 common sparse path proves eight blocks empty. A hit returns to a four-block

@@ -18,8 +18,8 @@ to 38.
 `casei` finished first on every row in that snapshot against the entrants the
 arena counted at the time: Go regexp, PCRE2-JIT, Vectorscan, StringZilla, veloz,
 and Rust Aho-Corasick where their contracts apply. rust/regex was timed but
-counted on only 1 of the 36 rows, because the audit could not see its vector
-width. The arena now counts every pinned entrant on every row it supports, so
+counted on only 1 of the 36 rows, and Rust Aho-Corasick was not counted on
+`multi_N8_hit_log_1mb`, because the audit could not see their vector widths. The arena now counts every pinned entrant on every row it supports, so
 the current verifier rejects these receipts. They record the prior field. They
 are not a result against the full field; the 38-row run with every entrant is
 the next publication gate.
@@ -283,8 +283,9 @@ stay in the repo so the next attempt starts from evidence.
 - Plan compilation has a cost. Cache a matcher for repeated searches.
 - The current arena has 38 rows. Its sources, field, dispatch, failed
   measurements, and verifier are open and pinned. The checked-in acceptance
-  snapshot covers the prior 36-row inventory and counted rust/regex on only one
-  row, so it is not a result against the full field. Rebar is the external
+  snapshot covers the prior 36-row inventory, counted rust/regex on only one
+  row, and left Rust Aho-Corasick out of one row, so it is not a result against
+  the full field. Rebar is the external
   cross-check.
 
 ## Read next
