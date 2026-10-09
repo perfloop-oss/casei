@@ -413,10 +413,10 @@ func plant(rng *rand.Rand, patterns []string, s Spec) string {
 
 // variant spells p as a planted occurrence. Most copies flip the case of each
 // rune, as text does. On non-ASCII cells one copy in eight spells each rune as
-// a random member of its whole simple-fold orbit instead -- the Kelvin sign,
-// long s, final sigma, and the historic Cyrillic forms U+1C80..U+1C88 -- so the
-// hazards are present without dominating the text. ASCII cells stay ASCII, so
-// the ASCII tier keeps its ASCII-only entrants. Case-sensitive cells plant p.
+// a random member of HazardMates instead -- the Kelvin sign, long s, final
+// sigma, the Ohm and Angstrom signs -- so the width-changing folds are present
+// without dominating the text. ASCII cells stay ASCII, so the ASCII tier keeps
+// its ASCII-only entrants. Case-sensitive cells plant p.
 func variant(rng *rand.Rand, p string, s Spec) string {
 	if s.Sensitive {
 		return p
@@ -425,17 +425,58 @@ func variant(rng *rand.Rand, p string, s Spec) string {
 	var b strings.Builder
 	for _, r := range p {
 		if hazard {
-			orbit := []rune{r}
-			for x := unicode.SimpleFold(r); x != r; x = unicode.SimpleFold(x) {
-				orbit = append(orbit, x)
-			}
-			r = orbit[rng.IntN(len(orbit))]
+			mates := HazardMates(r)
+			r = mates[rng.IntN(len(mates))]
 		} else if flipped := flipCase(rng, r); FoldKey(flipped) == FoldKey(r) {
 			r = flipped
 		}
 		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+// HazardMates returns r and the members of its simple-fold orbit that the board
+// may plant in a timing cell: those below U+0500 (Latin, Greek, Cyrillic) and
+// the Kelvin, Ohm, Angstrom, and capital sharp s signs. Every pinned entrant
+// folds these; TestBoardHazardMatesAgree in the arena holds each entrant to it.
+// Other orbit members, such as the historic Cyrillic forms U+1C80..U+1C88, are
+// rare in text and some entrants do not fold them. They belong to the semantic
+// tests, not to timing cells, where they would disqualify an entrant and
+// weaken the field.
+func HazardMates(r rune) []rune {
+	mates := []rune{r}
+	for x := unicode.SimpleFold(r); x != r; x = unicode.SimpleFold(x) {
+		switch {
+		case x < 0x500, x == '\u1E9E', x == '\u2126', x == '\u212A', x == '\u212B':
+			mates = append(mates, x)
+		}
+	}
+	return mates
+}
+
+// PatternRunes lists every rune the generator can put in a pattern: printable
+// ASCII, the Russian word list in both cases, and the runes that stand in for
+// ASCII in non-ASCII patterns.
+func PatternRunes() []rune {
+	seen := map[rune]bool{}
+	for r := rune(' '); r <= '~'; r++ {
+		seen[r] = true
+	}
+	for _, w := range cyrillicWords {
+		for _, r := range w {
+			seen[unicode.ToLower(r)], seen[unicode.ToUpper(r)] = true, true
+		}
+	}
+	for _, r := range nonASCIIRunes {
+		seen[r] = true
+	}
+	seen['\u212A'], seen['\u017F'] = true, true // from widen
+	out := make([]rune, 0, len(seen))
+	for r := range seen {
+		out = append(out, r)
+	}
+	slices.Sort(out)
+	return out
 }
 
 func flipCase(rng *rand.Rand, r rune) rune {

@@ -10,9 +10,10 @@ The rules, from the casei Initiative:
 - no cell has x_vs_best above 1.10;
 - the run measured exactly the cells pinned in arena/board/cells.txt, from
   the pinned seed;
-- casei answers every cell, and every pinned entrant that
-  supports it was timed and counted, unless the run reports that entrant's
-  answer as wrong on that cell. Wrong answers are listed, never silent;
+- casei answers every cell, and every pinned entrant that supports it was
+  timed and counted. An entrant the run reports as wrong fails it: the board
+  plants only fold mates every entrant handles, so a wrong answer is a board or
+  adapter bug;
 - the run is on the performance host: GenuineIntel family 6 model 143 with
   AVX-512F/BW/VBMI.
 
@@ -187,8 +188,10 @@ def check_cell(key, cell):
     want = supported_entrants(cell)
     for entrant in ENTRANTS:
         active, wrong = cell[f"{entrant}_active"], cell[f"{entrant}_wrong"]
-        if entrant in want and active + wrong != 1:
-            failures.append(f"{key}: {entrant} dropped ({entrant}_active={active:g}, {entrant}_wrong={wrong:g})")
+        if wrong:
+            failures.append(f"{key}: {entrant} answered wrongly; a board or adapter bug")
+        elif entrant in want and active != 1:
+            failures.append(f"{key}: {entrant} dropped ({entrant}_active={active:g})")
         if entrant not in want and active + wrong != 0:
             failures.append(f"{key}: {entrant} counted outside its tier ({entrant}_active={active:g})")
     active = [e for e in ENTRANTS if cell[f"{e}_active"] == 1]
@@ -247,10 +250,6 @@ def verify(path, pinned=PINNED):
             failures.append(f"{family}: {len(members) - len(answered)} of {len(members)} cells unanswered by casei")
         elif aggregate >= AGGREGATE_LIMIT:
             failures.append(f"{family}: aggregate x_vs_best={aggregate:.4f} is not below {AGGREGATE_LIMIT}")
-    for entrant in ENTRANTS:
-        wrong = sorted(k for k, c in cells.items() if c[f"{entrant}_wrong"] == 1)
-        if wrong:
-            lines.append(f"{entrant} answered {len(wrong)} cells wrongly and was not timed there: {', '.join(wrong)}")
     return lines, failures
 
 

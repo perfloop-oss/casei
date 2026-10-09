@@ -172,6 +172,11 @@ func TestPinnedBoard(t *testing.T) {
 		if !utf8.ValidString(c.Haystack) || len(c.Haystack) > s.Size || len(c.Haystack) < s.Size-utf8.UTFMax {
 			t.Fatalf("%s: haystack of %d bytes", s.Name(), len(c.Haystack))
 		}
+		for _, r := range c.Haystack {
+			if 0x1C80 <= r && r <= 0x1C8F {
+				t.Fatalf("%s: planted %U, a fold mate outside HazardMates", s.Name(), r)
+			}
+		}
 		hits := Matches(c.Haystack, c.Patterns, s.Sensitive, -1)
 		if s.Density == "none" && len(hits) != 0 {
 			t.Errorf("%s: none-density cell has %d matches", s.Name(), len(hits))

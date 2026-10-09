@@ -135,11 +135,9 @@ class VerifyBoardTest(unittest.TestCase):
         name = names_where(lambda n: not ascii_tier_of(n))[0]
         self.assertFails(transcript(**{key(name): {"extra": "rustac"}}), "rustac counted outside its tier")
 
-    def test_lists_wrong_entrant_without_failing(self):
+    def test_rejects_wrong_entrant(self):
         k = family_keys("script")[13]
-        lines, failures = self.run_verify(transcript(**{k: {"wrong": "vectorscan"}}))
-        self.assertEqual(failures, [])
-        self.assertTrue(any(l.startswith("vectorscan answered 1 cells wrongly") and k in l for l in lines), lines)
+        self.assertFails(transcript(**{k: {"wrong": "vectorscan"}}), f"{k}: vectorscan answered wrongly")
 
     def test_rejects_unsupported_case_sensitive_cell(self):
         _, failures = self.run_verify(transcript(**{k: {"supported": 0} for k in CS_KEYS}))

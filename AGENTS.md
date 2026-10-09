@@ -150,8 +150,10 @@ density, haystack size (64 B-16 MiB), and operation (`Find`, `Each`,
 `IndexFold`) -- and draw every other property at random. The generator, the
 seed, and every cell (`arena/board/cells.txt`) are in the repository; read them.
 Every pinned entrant that supports a cell is timed with the bar's pairing and
-counts. An entrant whose answer disagrees with the arena oracle on a cell is
-named as wrong there and not timed; a wrong `casei` answer fails the cell.
+counts. Cells plant ordinary case flips and only the fold mates every entrant
+folds (`board.HazardMates`); rarer orbit members belong to the semantic tests.
+Any answer that disagrees with the arena oracle, from `casei` or an entrant,
+fails the run.
 
 ```
 go test -run '^$' -bench '^BenchmarkBoard$' -benchtime 1x | tee board.txt

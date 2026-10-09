@@ -82,7 +82,7 @@ func runBoardCell(b *testing.B, seed uint64, spec board.Spec) {
 	}
 	for _, w := range c.wrong {
 		metrics[w.name+"_wrong"] = 1
-		b.Logf("seed %#x: %v; not timed on this cell", seed, w)
+		b.Logf("seed %#x: %v; not timed, and the verifier fails the run", seed, w)
 	}
 	best, competitors := 0.0, 0
 	for _, e := range c.entrants {
@@ -126,10 +126,9 @@ type boardRun struct {
 
 // check holds casei and every entrant to the oracle before any timing, so a
 // ratio never comes from a wrong answer. A wrong casei answer fails the cell.
-// A wrong entrant answer moves the entrant to wrong: it is reported by name on
-// the cell, not timed, and not hidden. The board reaches fold orbits the fixed
-// rows never did: Vectorscan 5.4.12 does not fold в, д, о, с, т, and ъ with
-// their Unicode 9 orbit members U+1C80..U+1C86, which Go's regexp does.
+// A wrong entrant is reported on the cell as <name>_wrong and not timed, and
+// the verifier fails the run: cells plant only fold mates every entrant
+// handles (board.HazardMates), so a wrong answer is a board or adapter bug.
 func (c *boardCell) check() error {
 	if err := c.disagreement(c.candidate); err != nil {
 		return err
@@ -487,8 +486,8 @@ func boardHost() string {
 }
 
 // TestBoardEntrantsAgree builds the small cells of the pinned board and holds
-// casei to the oracle, as BenchmarkBoard does before it times a cell. It logs
-// each entrant that disagrees; the board reports those as wrong, not timed. It keeps the board's wiring under CI's arena job,
+// casei and every supporting entrant to the oracle, as BenchmarkBoard does
+// before it times a cell. It keeps the board's wiring under CI's arena job,
 // which builds the native field but does not run benchmarks.
 func TestBoardEntrantsAgree(t *testing.T) {
 	for _, spec := range board.Cells(board.Seed) {
@@ -503,7 +502,71 @@ func TestBoardEntrantsAgree(t *testing.T) {
 			t.Fatalf("cell %s: %v", spec.Name(), err)
 		}
 		for _, w := range c.wrong {
-			t.Logf("cell %s: %v", spec.Name(), w)
+			t.Errorf("cell %s: %v", spec.Name(), w)
+		}
+	}
+}
+
+// TestBoardHazardMatesAgree holds every pinned entrant that speaks UTF-8 to
+// board.HazardMates: each fold mate the board may plant must be found by every
+// entrant, from every rune a pattern can hold. A mate an entrant does not fold
+// belongs in the semantic tests, not in timing cells.
+func TestBoardHazardMatesAgree(t *testing.T) {
+	type literal func(pattern string) (func(haystack string) int, error)
+	entrants := map[string]literal{
+		"regexp": func(p string) (func(string) int, error) {
+			re := regexpAltFor([]string{p})
+			return func(h string) int {
+				if loc := re.FindStringIndex(h); loc != nil {
+					return loc[0]
+				}
+				return -1
+			}, nil
+		},
+		"pcre2": func(p string) (func(string) int, error) {
+			re, err := pcre2jit.CompileLiteral(p)
+			if err != nil {
+				return nil, err
+			}
+			return re.Index, nil
+		},
+		"rure": func(p string) (func(string) int, error) {
+			re, err := rure.CompileLiteral(p)
+			if err != nil {
+				return nil, err
+			}
+			return re.Index, nil
+		},
+	}
+	if bits, _ := expectedVectorscanBits(); bits > 0 {
+		entrants["vectorscan"] = func(p string) (func(string) int, error) {
+			m, err := vectorscan.CompileLiteral(p)
+			if err != nil {
+				return nil, err
+			}
+			return m.Index, nil
+		}
+	}
+	if stringZillaAvailable {
+		entrants["stringzilla"] = func(p string) (func(string) int, error) {
+			m, err := stringzilla.CompileLiteral(p)
+			if err != nil {
+				return nil, err
+			}
+			return m.Index, nil
+		}
+	}
+	for _, r := range board.PatternRunes() {
+		for name, compile := range entrants {
+			index, err := compile(string(r))
+			if err != nil {
+				t.Fatalf("%s %q: %v", name, r, err)
+			}
+			for _, mate := range board.HazardMates(r) {
+				if got := index("\n" + string(mate) + "\n"); got != 1 { // newline is never a pattern rune
+					t.Errorf("%s does not fold %q (%U) with %q (%U)", name, r, r, mate, mate)
+				}
+			}
 		}
 	}
 }
