@@ -117,7 +117,9 @@ The acceptance board added three focused rows:
 - `multi/multi_N5_raw_transition_late_hit_5mb`
 
 Those rows brought the checked-in acceptance board to 36. All 36 remain below
-1.0 `x_vs_best` on both hosts after the Rebar work. The current board adds two
+1.0 `x_vs_best` on both hosts after the Rebar work, against the field the arena
+counted then; rust/regex counted on only one of those rows, and Rust
+Aho-Corasick was not counted on `multi_N8_hit_log_1mb`. The current board adds two
 complete-triple rows, bringing the next publication gate to 38.
 
 ## The benchmark contracts

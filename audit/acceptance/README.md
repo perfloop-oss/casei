@@ -11,7 +11,16 @@ published snapshot rather than evidence for the new complete-triple rows.
 
 Every row has three samples. Every sample has `x_vs_best < 1`. `casei` reports
 512-bit dispatch, Vectorscan reports a 512-bit VBMI database, and the verifier
-checks every other active entrant against its declared width.
+of the time checked every other active entrant against its declared width.
+
+These receipts predate the rule that every pinned entrant counts toward
+`x_vs_best` (#29). The arena then left rust/regex out of a row when the audit
+could not see its vector width. On each host it counted rust/regex only on
+`single/code_hit_brackets_256kb`: 66 of 69 single-row samples and all 39
+multi-row samples have `rure_active=0`. Rust Aho-Corasick was also left out of
+`multi/multi_N8_hit_log_1mb`: all three samples on each host have
+`rustac_active=0`. They record the prior field. They are not a result against
+the full field.
 
 ## Verify the receipts
 
@@ -25,9 +34,11 @@ python3 scripts/verify_benchmarkbar.py --historical-36 \
   audit/acceptance/results/spr/benchmarkbar.txt
 ```
 
-The historical verifier requires the exact 36-row inventory, three samples per
-row, at least two entrants, all dispatch metrics, and every `x_vs_best` below
-1.0. Its normal mode requires the current 38-row inventory.
+The receipt checksums in `SHA256SUMS` pass. The two verifier commands and
+`summarize.py` now fail with `rure_active=0, want 1`, because the verifier requires every pinned
+entrant. The historical mode requires the exact 36-row inventory, three samples
+per row, at least two entrants, all dispatch metrics, and every `x_vs_best`
+below 1.0. Its normal mode requires the current 38-row inventory.
 
 [`ablations/`](ablations/README.md) removes the origin gate, variable raw
 confirmation, and returned pattern tags one at a time. Each removal breaks its

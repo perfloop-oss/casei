@@ -1759,7 +1759,9 @@ exact byte.
 The gate ships only as part of the combined result with tagged survivor bits,
 variable-width raw confirmation, and the wider sparse tagged schedule. No
 isolated novelty claim is made for it. The combined source passed every sample
-of the 36-row paired field on both hosts: worst medians were 0.9624 on Ice Lake
+of the 36-row paired field on both hosts, against the entrants the arena counted
+then (rust/regex counted on only one row, and Rust Aho-Corasick was left out of
+one row): worst medians were 0.9624 on Ice Lake
 and 0.9716 on Sapphire Rapids. It also moved all five same-contract Rebar rows
 below 1.0 on both hosts, with worst ratios 0.8794 and 0.8999. Those external
 rows are the result the prior construction did not hold.
@@ -1786,8 +1788,10 @@ remains the sole match authority for N=1 and multi-pattern calls.
 The construction is therefore a negative novelty finding at the component
 level. The claimed advance is the result: correct simple-fold UTF-8 literal-set
 search, including non-overlapping enumeration, that leads the complete pinned
-field on all 36 arena rows and all five same-contract Rebar rows on both target
-microarchitectures. A published implementation with the same semantics and a
+field on all five same-contract Rebar rows on both target microarchitectures.
+The 36-row arena receipts predate the rule that every pinned entrant counts, so
+they do not show a lead over the complete field; the 38-row run with every
+entrant is the gate for that claim. A published implementation with the same semantics and a
 better measured position would falsify that result claim.
 
 ### Complete streaming enumerator: negative result

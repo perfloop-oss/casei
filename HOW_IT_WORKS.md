@@ -123,7 +123,7 @@ one-per-cycle throughput on Ice Lake. Its current uops.info catalog has no
 Sapphire Rapids column, so the instruction table is used only to explain the
 Ice Lake schedule. Eight independent compares give the core work while earlier
 masks are in flight. The Sapphire Rapids result comes from direct execution and
-the complete field measurements.
+the arena field measurements.
 
 The tagged multi-anchor kernel uses the same idea with `VPERMB` tables. Its
 common sparse path proves eight blocks empty. A hit returns to a four-block
@@ -267,8 +267,9 @@ Removed experiments and their falsifiers live in [`NOVELTY.md`](NOVELTY.md).
 8. The active publication target extends that gate to all 18 representable
    Rebar rows. The current checked-in result is 9/18 on each host.
 
-The current evidence is in [`audit/acceptance/`](audit/acceptance/README.md)
-and [`audit/rebar/`](audit/rebar/README.md).
+The Rebar evidence is in [`audit/rebar/`](audit/rebar/README.md). The
+36-row receipts in [`audit/acceptance/`](audit/acceptance/README.md) predate the
+rule that every pinned entrant counts, so they do not meet gate 6.
 
 ## Limits
 
