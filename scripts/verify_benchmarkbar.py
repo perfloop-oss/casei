@@ -219,40 +219,24 @@ def verify(path, expected_samples=3, require_wins=True, required_rows=REQUIRED_R
                     "veloz_vector_bits": 256 if not multi and not utf8 else 0,
                 }
             )
+            # Every pinned entrant that supports a row counts. Rure supports
+            # every row; Rust aho-corasick supports the non-UTF-8 multi rows.
+            # Their dispatched widths are diagnostics, so they are not pinned.
+            expected["rure_active"] = 1
             if multi:
                 expected.update(
                     {
+                        "rustac_active": int(not utf8),
                         "go_ac_active": int(not utf8),
                         "go_ac_vector_bits": 0,
                     }
                 )
                 if utf8:
-                    expected.update(
-                        {
-                            "rustac_active": 0,
-                            "rustac_vector_bits": 0,
-                        }
-                    )
+                    expected["rustac_vector_bits"] = 0
             for metric, want in expected.items():
                 if sample[metric] != want:
                     raise VerificationError(
                         f"{path}: {label} has {metric}={sample[metric]:g}, want {want}"
-                    )
-            rure_dispatch = (sample["rure_active"], sample["rure_vector_bits"])
-            if rure_dispatch not in {(0, 0), (1, 256)}:
-                raise VerificationError(
-                    f"{path}: {label} has incoherent rure dispatch "
-                    f"active={rure_dispatch[0]:g}, bits={rure_dispatch[1]:g}"
-                )
-            if multi and not utf8:
-                rustac_dispatch = (
-                    sample["rustac_active"],
-                    sample["rustac_vector_bits"],
-                )
-                if rustac_dispatch not in {(0, 0), (1, 256)}:
-                    raise VerificationError(
-                        f"{path}: {label} has incoherent rustac dispatch "
-                        f"active={rustac_dispatch[0]:g}, bits={rustac_dispatch[1]:g}"
                     )
             competitors = 4 + int(sample["rure_active"])
             if multi:

@@ -19,15 +19,19 @@ def row(
     vbmi=1,
     pcre2_bits=128,
     stringzilla_bits=512,
-    rure_active=0,
-    rure_bits=0,
+    rure_active=1,
+    rure_bits=256,
+    rustac_active=None,
+    rustac_bits=None,
 ):
     multi = name.startswith("multi/")
     utf8 = verify.is_utf8_row(name)
     veloz_active = int(not multi and not utf8)
     veloz_bits = 256 if veloz_active else 0
-    rustac_active = int(multi and not utf8)
-    rustac_bits = 256 if rustac_active else 0
+    if rustac_active is None:
+        rustac_active = int(multi and not utf8)
+    if rustac_bits is None:
+        rustac_bits = 256 if rustac_active else 0
     go_ac_active = int(multi and not utf8)
     if competitors is None:
         competitors = 4 + rure_active + (rustac_active if multi else veloz_active)
@@ -96,9 +100,32 @@ class VerifyBenchmarkBarTest(unittest.TestCase):
         with self.assertRaisesRegex(verify.VerificationError, "pcre2_vector_bits"):
             self.verify_text(transcript(pcre2_bits=0))
 
-    def test_rejects_incoherent_rure_dispatch(self):
-        with self.assertRaisesRegex(verify.VerificationError, "incoherent rure"):
-            self.verify_text(transcript(rure_active=1, rure_bits=128))
+    def test_rejects_dropped_rure(self):
+        with self.assertRaisesRegex(verify.VerificationError, "rure_active"):
+            self.verify_text(transcript(rure_active=0, rure_bits=0))
+
+    def test_rure_width_is_diagnostic(self):
+        summary = self.verify_text(transcript(rure_bits=0))
+        self.assertIn("PASS", summary)
+
+    def test_rejects_dropped_rustac(self):
+        text = "".join(
+            row(name, rustac_active=0, rustac_bits=0)
+            if name.startswith("multi/") and not verify.is_utf8_row(name)
+            else row(name)
+            for name in sorted(verify.REQUIRED_ROWS)
+            for _ in range(3)
+        )
+        with self.assertRaisesRegex(verify.VerificationError, "rustac_active"):
+            self.verify_text(text)
+
+    def test_rustac_width_is_diagnostic(self):
+        text = "".join(
+            row(name, rustac_bits=0)
+            for name in sorted(verify.REQUIRED_ROWS)
+            for _ in range(3)
+        )
+        self.assertIn("PASS", self.verify_text(text))
 
     def test_rejects_unmeasured_row(self):
         with self.assertRaisesRegex(verify.VerificationError, "unmeasured"):
