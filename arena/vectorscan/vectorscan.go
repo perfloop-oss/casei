@@ -105,6 +105,60 @@ static int casei_hs_scan(const hs_database_t *database, const char *subject,
 	return hs_scan(database, subject, length, 0, scratch, casei_hs_on_match, result);
 }
 
+// casei_hs_events collects every report of one scan for Each. The buffer
+// grows by doubling and is kept with its scratch, so repeated scans reuse it.
+typedef struct {
+	unsigned long long start;
+	unsigned long long end;
+	unsigned int id;
+} casei_hs_event;
+
+typedef struct {
+	casei_hs_event *events;
+	size_t len;
+	size_t cap;
+	int failed;
+} casei_hs_events;
+
+static casei_hs_events *casei_hs_events_new(void) {
+	return (casei_hs_events *)calloc(1, sizeof(casei_hs_events));
+}
+
+static void casei_hs_events_free(casei_hs_events *list) {
+	if (list != NULL) {
+		free(list->events);
+		free(list);
+	}
+}
+
+static int casei_hs_on_event(unsigned int id, unsigned long long from,
+		unsigned long long to, unsigned int flags, void *context) {
+	(void)flags;
+	casei_hs_events *list = (casei_hs_events *)context;
+	if (list->len == list->cap) {
+		size_t cap = list->cap == 0 ? 1024 : list->cap * 2;
+		casei_hs_event *grown = (casei_hs_event *)realloc(list->events, cap * sizeof(*grown));
+		if (grown == NULL) {
+			list->failed = 1;
+			return 1;
+		}
+		list->events = grown;
+		list->cap = cap;
+	}
+	list->events[list->len].start = from;
+	list->events[list->len].end = to;
+	list->events[list->len].id = id;
+	list->len++;
+	return 0;
+}
+
+static int casei_hs_scan_all(const hs_database_t *database, const char *subject,
+		unsigned int length, hs_scratch_t *scratch, casei_hs_events *list) {
+	list->len = 0;
+	list->failed = 0;
+	return hs_scan(database, subject, length, 0, scratch, casei_hs_on_event, list);
+}
+
 static int casei_hs_result_found(const casei_hs_result *result) {
 	return result->found;
 }
@@ -120,9 +174,11 @@ static unsigned int casei_hs_result_id(const casei_hs_result *result) {
 import "C"
 
 import (
+	"cmp"
 	"fmt"
 	"math"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"unsafe"
@@ -142,7 +198,15 @@ type Matcher struct {
 }
 
 type scratch struct {
-	ptr *C.hs_scratch_t
+	ptr    *C.hs_scratch_t
+	events *C.casei_hs_events // Each's report buffer, in C memory
+}
+
+// scratchMemory is what a dropped scratch leaves to free. It is separate from
+// scratch so the cleanup does not keep its own scratch reachable.
+type scratchMemory struct {
+	ptr    *C.hs_scratch_t
+	events *C.casei_hs_events
 }
 
 var emptySubject = [1]byte{}
@@ -267,7 +331,18 @@ func Compile(patterns []string) (*Matcher, error) {
 		if status := C.hs_alloc_scratch(database, &ptr); status != 0 {
 			panic(fmt.Sprintf("Vectorscan scratch allocation failed: code %d", int(status)))
 		}
-		return &scratch{ptr: ptr}
+		events := C.casei_hs_events_new()
+		if events == nil {
+			panic("Vectorscan report buffer allocation failed")
+		}
+		s := &scratch{ptr: ptr, events: events}
+		// The pool drops idle scratch at GC; free its C memory with it. The
+		// board compiles a database per cell, so this would otherwise grow.
+		runtime.AddCleanup(s, func(m scratchMemory) {
+			C.casei_hs_events_free(m.events)
+			C.hs_free_scratch(m.ptr)
+		}, scratchMemory{ptr, events})
+		return s
 	}
 	// Allocate one scratch area before timing begins. The arena holds compiled
 	// databases for its process lifetime, just as it does the PCRE2 baseline.
@@ -361,4 +436,49 @@ func (m *Matcher) Index(haystack string) int {
 		return -1
 	}
 	return start
+}
+
+// Each calls yield for the non-overlapping matches of casei's Matcher.Each:
+// leftmost start first, ties to the lowest pattern index, the next match
+// starting at or after the previous match's end. Vectorscan reports every
+// match in no guaranteed order, so one scan collects all reports and the
+// adapter sorts and reduces them. Both are part of the timed baseline. Each
+// returns false when yield stops it. Empty patterns are outside its contract.
+func (m *Matcher) Each(haystack string, yield func(start, pattern, width int) bool) bool {
+	if m == nil || m.database == nil {
+		return true
+	}
+	if m.empty >= 0 {
+		panic("Vectorscan Each does not enumerate empty patterns")
+	}
+	if len(haystack) > math.MaxUint32 {
+		panic("Vectorscan subject exceeds its block-mode length limit")
+	}
+	scratch := m.scratch.Get().(*scratch)
+	defer m.scratch.Put(scratch)
+	status := C.casei_hs_scan_all(
+		m.database, pointer(haystack), C.uint(len(haystack)), scratch.ptr, scratch.events,
+	)
+	runtime.KeepAlive(haystack)
+	if status != 0 || scratch.events.failed != 0 {
+		panic(fmt.Sprintf("Vectorscan scan failed: code %d", int(status)))
+	}
+	events := unsafe.Slice(scratch.events.events, int(scratch.events.len))
+	slices.SortFunc(events, func(a, b C.casei_hs_event) int {
+		if c := cmp.Compare(a.start, b.start); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.id, b.id)
+	})
+	var at C.ulonglong
+	for _, e := range events {
+		if e.start < at {
+			continue
+		}
+		if !yield(int(e.start), int(e.id), int(e.end-e.start)) {
+			return false
+		}
+		at = e.end
+	}
+	return true
 }

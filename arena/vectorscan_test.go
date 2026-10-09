@@ -2,8 +2,12 @@ package arena_test
 
 import (
 	"fmt"
+	"math/rand/v2"
+	"slices"
+	"strings"
 	"testing"
 
+	"github.com/tsenart/casei/arena/board"
 	vectorscan "github.com/tsenart/casei/arena/vectorscan"
 )
 
@@ -151,6 +155,46 @@ func TestVectorscanEmptyPatternTie(t *testing.T) {
 		want, wantOK := refFind(tc.haystack, tc.patterns)
 		if ok != wantOK || (ok && (start != want.Start || pattern != want.Pattern)) {
 			t.Errorf("Find(%q, %q) = {%d %d},%v want %+v,%v", tc.haystack, tc.patterns, pattern, start, ok, want, wantOK)
+		}
+	}
+}
+
+// TestVectorscanEachAgrees holds the report-collecting Each to the board's
+// oracle. Vectorscan reports matches in no guaranteed order, overlapping and
+// across fold forms of unequal width, so the reduction is where it can go wrong.
+func TestVectorscanEachAgrees(t *testing.T) {
+	alphabet := []rune("kKKsSſσςΣaAbB ßẞåÅÅжЖ")
+	rng := rand.New(rand.NewPCG(20261009, 1))
+	random := func(n int) string {
+		var b strings.Builder
+		for range n {
+			b.WriteRune(alphabet[rng.IntN(len(alphabet))])
+		}
+		return b.String()
+	}
+	for iteration := range 2000 {
+		haystack := random(rng.IntN(200))
+		patterns := make([]string, 1+rng.IntN(6))
+		for i := range patterns {
+			patterns[i] = random(1 + rng.IntN(4))
+		}
+		m, err := newVectorscanAlternation(patterns)
+		if err != nil {
+			t.Fatalf("iteration %d: %v", iteration, err)
+		}
+		var got []board.Hit
+		m.Each(haystack, func(start, pattern, width int) bool {
+			got = append(got, board.Hit{Start: start, Pattern: pattern, Width: width})
+			return true
+		})
+		if want := board.Matches(haystack, patterns, false, -1); !slices.Equal(got, want) {
+			t.Fatalf("iteration %d: Each(%q, %q) = %v, oracle %v", iteration, haystack, patterns, got, want)
+		}
+		if len(got) > 1 {
+			calls := 0
+			if m.Each(haystack, func(int, int, int) bool { calls++; return false }) || calls != 1 {
+				t.Fatalf("iteration %d: Each did not stop when yield returned false", iteration)
+			}
 		}
 	}
 }
