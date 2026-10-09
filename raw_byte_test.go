@@ -373,6 +373,209 @@ func TestRawByteMultiAnchorEnumeration(t *testing.T) {
 	}
 }
 
+func checkRawByteMultiReference(t *testing.T, matcher *Matcher, patterns []string, haystack string) {
+	t.Helper()
+	want, wantOK := refFind(haystack, patterns)
+	got, gotOK := matcher.Find(haystack)
+	if gotOK != wantOK || gotOK && got != want {
+		t.Fatalf("Find mismatch: Find(%x, %q) = %+v,%t; want %+v,%t", haystack, patterns, got, gotOK, want, wantOK)
+	}
+
+	wantEach := refEach(haystack, patterns)
+	var gotEach []refEachResult
+	if complete := matcher.Each(haystack, func(match Match, width int) bool {
+		gotEach = append(gotEach, refEachResult{match: match, width: width})
+		return true
+	}); !complete {
+		t.Fatalf("Each mismatch: stopped before completing %x", haystack)
+	}
+	if len(gotEach) != len(wantEach) {
+		t.Fatalf("Each mismatch: Each(%x, %q) returned %d results, want %d: got=%+v want=%+v",
+			haystack, patterns, len(gotEach), len(wantEach), gotEach, wantEach)
+	}
+	for i := range wantEach {
+		if gotEach[i] != wantEach[i] {
+			t.Fatalf("Each mismatch: Each(%x, %q) result %d = %+v, want %+v",
+				haystack, patterns, i, gotEach[i], wantEach[i])
+		}
+	}
+}
+
+// TestRawByteMultiSharedPrefixDifferential checks the public shared-plan
+// routes against the independent per-pattern reference for tied prefixes,
+// complete non-overlapping enumeration, and seeded shared-prefix plans.
+func TestRawByteMultiSharedPrefixDifferential(t *testing.T) {
+	patterns := []string{"σοφος", "σοφο"}
+	matcher := NewMatcher(patterns)
+	if !matcher.plan.rawByteMulti.usable() {
+		t.Fatal("test precondition: Greek tied-prefix plan did not select rawByteMulti")
+	}
+	if got, ok := refFind("σοφος", patterns); !ok || got != (Match{Pattern: 0, Start: 0}) {
+		t.Fatalf("reference precondition: Find = %+v,%t, want pattern 0 at byte 0", got, ok)
+	}
+	if want := refEach("σοφος", patterns); len(want) != 1 ||
+		want[0] != (refEachResult{match: Match{Pattern: 0, Start: 0}, width: len("σοφος")}) {
+		t.Fatalf("reference precondition: Each = %+v, want pattern 0 at byte 0 with width %d", want, len("σοφος"))
+	}
+	checkRawByteMultiReference(t, matcher, patterns, "σοφος")
+
+	// Kelvin's three-byte fold spelling must keep the selected match's source
+	// width, not the shorter terminal's or the pattern's byte length.
+	widthPatterns := []string{"σοφοkα", "σοφο"}
+	widthHaystack := "σοφοKα"
+	widthMatcher := NewMatcher(widthPatterns)
+	if !widthMatcher.plan.rawByteMulti.usable() {
+		t.Fatal("test precondition: width-changing tie plan did not select rawByteMulti")
+	}
+	if want := refEach(widthHaystack, widthPatterns); len(want) != 1 ||
+		want[0] != (refEachResult{match: Match{Pattern: 0, Start: 0}, width: len(widthHaystack)}) {
+		t.Fatalf("reference precondition: Each = %+v, want pattern 0 with source width %d", want, len(widthHaystack))
+	}
+	checkRawByteMultiReference(t, widthMatcher, widthPatterns, widthHaystack)
+
+	// The long Find route uses the exact common-byte origin gate, while Each
+	// continues to use the shared tagged scan. Both must keep the same tie.
+	originPatterns := []string{"σοφο!ς", "σοφο!"}
+	originHaystack := strings.Repeat("x", 4096) + "σοφο!ς"
+	originMatcher := NewMatcher(originPatterns)
+	if !originMatcher.plan.rawByteMulti.usable() || !originMatcher.plan.rawByteOrigin.usable() {
+		t.Fatal("test precondition: long tied-prefix plan did not select both raw-byte gates")
+	}
+	if got, ok := refFind(originHaystack, originPatterns); !ok || got != (Match{Pattern: 0, Start: 4096}) {
+		t.Fatalf("reference precondition: long Find = %+v,%t, want pattern 0 at byte 4096", got, ok)
+	}
+	if want := refEach(originHaystack, originPatterns); len(want) != 1 ||
+		want[0] != (refEachResult{match: Match{Pattern: 0, Start: 4096}, width: len("σοφο!ς")}) {
+		t.Fatalf("reference precondition: long Each = %+v, want pattern 0 with source width %d", want, len("σοφο!ς"))
+	}
+	checkRawByteMultiReference(t, originMatcher, originPatterns, originHaystack)
+
+	// A pending early match must not hide a later non-overlapping result when
+	// maxOffset keeps the shared scan open until it reaches the haystack tail.
+	tailPatterns := []string{"σοφος", "σοφο", "σοφοαβγδεζηθλν"}
+	tailMatcher := NewMatcher(tailPatterns)
+	if !tailMatcher.plan.rawByteMulti.usable() || int(tailMatcher.plan.rawByteMulti.maxOffset) <= len("σοφο") {
+		t.Fatal("test precondition: tail plan did not retain a wide rawByteMulti lookahead")
+	}
+	checkRawByteMultiReference(t, tailMatcher, tailPatterns, "σοφοxσοφος")
+
+	pool := []string{"σοφος", "σοφο", "σοφοα", "σοφοβ", "σοφογ", "σοφοδε", "σοφοζκ", "σοφολμ"}
+	units := []string{"x", " ", "σ", "Σ", "ς", "ο", "Ο", "φ", "Φ", "α", "β", "γ", "δ", "ζ", "λ", "μ", "ᲇ", "ᲂ", "ᲁ", "€", "\xff", "\x80"}
+	rng := rand.New(rand.NewPCG(20260615, 83))
+	accepted := 0
+	for attempt := 0; attempt < 1024 && accepted < 128; attempt++ {
+		patterns := []string{pool[0], pool[1]}
+		for extra := rng.IntN(4); extra > 0; extra-- {
+			candidate := pool[2+rng.IntN(len(pool)-2)]
+			found := false
+			for _, pattern := range patterns {
+				found = found || pattern == candidate
+			}
+			if !found {
+				patterns = append(patterns, candidate)
+			}
+		}
+		rng.Shuffle(len(patterns), func(i, j int) { patterns[i], patterns[j] = patterns[j], patterns[i] })
+		matcher := NewMatcher(patterns)
+		if !matcher.plan.rawByteMulti.usable() {
+			continue
+		}
+		accepted++
+
+		var haystack strings.Builder
+		for range rng.IntN(8) {
+			haystack.WriteString(units[rng.IntN(len(units))])
+		}
+		if attempt%4 == 0 {
+			haystack.WriteString(pool[rng.IntN(len(pool))])
+		} else {
+			haystack.WriteString(pool[0])
+		}
+		if attempt%3 == 0 {
+			haystack.WriteString("x")
+			haystack.WriteString(pool[rng.IntN(len(pool))])
+		}
+		checkRawByteMultiReference(t, matcher, patterns, haystack.String())
+	}
+	if accepted < 128 {
+		t.Fatalf("test precondition: generated only %d usable shared-prefix rawByteMulti plans", accepted)
+	}
+}
+
+// TestRawByteMultiVariableWidthEOFDifferential checks that alternative fold
+// offsets near EOF do not discard a usable shorter spelling before exact replay.
+func TestRawByteMultiVariableWidthEOFDifferential(t *testing.T) {
+	check := func(name string, patterns []string, haystack string, origin bool) {
+		t.Run(name, func(t *testing.T) {
+			matcher := NewMatcher(patterns)
+			if !matcher.plan.rawByteMulti.usable() {
+				t.Fatalf("test precondition: patterns did not select rawByteMulti: %q", patterns)
+			}
+			if origin && !matcher.plan.rawByteOrigin.usable() {
+				t.Fatalf("test precondition: patterns did not select rawByteOrigin: %q", patterns)
+			}
+			want, wantOK := refFind(haystack, patterns)
+			got, gotOK := matcher.Find(haystack)
+			if gotOK != wantOK || gotOK && got != want {
+				t.Errorf("Find mismatch: case %s patterns %q gave %+v,%t; want %+v,%t", name, patterns, got, gotOK, want, wantOK)
+			}
+
+			wantEach := refEach(haystack, patterns)
+			var gotEach []refEachResult
+			complete := matcher.Each(haystack, func(match Match, width int) bool {
+				gotEach = append(gotEach, refEachResult{match: match, width: width})
+				return true
+			})
+			if !complete || len(gotEach) != len(wantEach) {
+				t.Errorf("Each mismatch: case %s patterns %q gave %+v, complete=%t; want %+v", name, patterns, gotEach, complete, wantEach)
+			} else {
+				for i := range wantEach {
+					if gotEach[i] != wantEach[i] {
+						t.Errorf("Each mismatch: case %s patterns %q result %d = %+v; want %+v", name, patterns, i, gotEach[i], wantEach[i])
+					}
+				}
+			}
+		})
+	}
+
+	variablePatterns := []string{"φφφαφ!kβ", "φφφαφ!kβο"}
+	check("short-eof", variablePatterns, "φφφαφ!kβ", false)
+	check("two-byte-tail-control", variablePatterns, "φφφαφ!kβxx", false)
+	check("long-origin-eof", variablePatterns, strings.Repeat("x", 4096)+"φφφαφ!kβ", true)
+	check("truncated-final-pair", variablePatterns, "φφφαφ!k", false)
+	check("opaque-middle", variablePatterns, "φφφαφ!\xffβ", false)
+	check("opaque-prefix", variablePatterns, strings.Repeat("x", 64)+"\xffφφφαφ!kβ", false)
+
+	// Fold-equivalent patterns at one start still choose the lowest ID when
+	// alternate confirmation and guard widths extend past EOF.
+	tiedPatterns := []string{"φφφαφ!kβ", "ΦΦΦΑΦ!KΒ", "φφφαφ!kβο"}
+	check("same-start-tie", tiedPatterns, "φφφαφ!kβ", false)
+
+	// A shorter later-start candidate must not hide the anchored literal whose
+	// final guard alternative is outside the input.
+	earlierPatterns := []string{"φφφαφςο", "φφφαφ!", "xφφφαφ!kβ", "φφφαφ"}
+	check("earlier-start", earlierPatterns, "xφφφαφ!kβ", false)
+	check("earlier-start-control", []string{"φφφαφ!kβ", "φφαφ"}, "φφφαφ!kβ", false)
+
+	// Exercise independent Kelvin-width choices at both k positions.
+	mixedPatterns := []string{"φαkφkβ", "φαkφkβο"}
+	for _, first := range []string{"k", "K", "K"} {
+		for _, second := range []string{"k", "K", "K"} {
+			check("mixed-k-"+first+"-"+second, mixedPatterns, "φα"+first+"φ"+second+"β", false)
+		}
+	}
+
+	// Long single-byte gaps put a usable alternative guard near EOF while other
+	// offsets extend beyond it. Sweep vector and scalar-tail alignments.
+	longPattern := "φφφαφ" + strings.Repeat("!", 64) + "kβ"
+	longPatterns := []string{longPattern, longPattern + "ο"}
+	check("vector-block-at-zero", longPatterns, longPattern, false)
+	for _, alignment := range []int{0, 1, 31, 63} {
+		haystack := strings.Repeat("x", 64+alignment) + longPattern
+		check("vector-tail", longPatterns, haystack, false)
+	}
+}
+
 func TestRawByteMultiAnchorSkipNeverPassesAConfirmedTag(t *testing.T) {
 	plan := newSearchPlan(rawByteCyrillicPatterns)
 	filter := &plan.rawByteMulti
