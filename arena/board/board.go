@@ -366,26 +366,21 @@ func plant(rng *rand.Rand, patterns []string, s Spec) string {
 	return b.String()
 }
 
-// variant spells p as a planted occurrence. Most copies flip the case of each
-// rune, as text does. On non-ASCII cells one copy in eight spells each rune as
-// a random member of HazardMates instead -- the Kelvin sign, long s, final
-// sigma, the Ohm and Angstrom signs -- so the width-changing folds are present
-// without dominating the text. ASCII cells stay ASCII, so the ASCII tier keeps
-// its ASCII-only entrants. Case-sensitive cells plant p.
+// variant spells each rune of p as a random member of HazardMates: its case
+// mates, and on non-ASCII cells the wider fold mates every entrant handles.
+// ASCII cells stay ASCII, so the ASCII tier keeps its ASCII-only entrants.
+// Case-sensitive cells plant p.
 func variant(rng *rand.Rand, p string, s Spec) string {
 	if s.Sensitive {
 		return p
 	}
-	hazard := s.NonASCII && rng.IntN(8) == 0
 	var b strings.Builder
 	for _, r := range p {
-		if hazard {
-			mates := HazardMates(r)
-			r = mates[rng.IntN(len(mates))]
-		} else if flipped := flipCase(rng, r); FoldKey(flipped) == FoldKey(r) {
-			r = flipped
+		mates := HazardMates(r)
+		if !s.NonASCII {
+			mates = slices.DeleteFunc(mates, func(m rune) bool { return m >= utf8.RuneSelf })
 		}
-		b.WriteRune(r)
+		b.WriteRune(mates[rng.IntN(len(mates))])
 	}
 	return b.String()
 }
@@ -407,13 +402,6 @@ func HazardMates(r rune) []rune {
 		}
 	}
 	return mates
-}
-
-func flipCase(rng *rand.Rand, r rune) rune {
-	if rng.IntN(2) == 0 {
-		return unicode.ToUpper(r)
-	}
-	return unicode.ToLower(r)
 }
 
 // absent mutates each pattern that occurs in haystack until it does not, by
