@@ -232,11 +232,22 @@ func (a *Alternation) Find(haystack string) (start, pattern int, ok bool) {
 	return bestStart, bestPattern, true
 }
 
+// simpleFoldMatchAt reports whether needle matches haystack at start under
+// simple folding. Equal bytes and ASCII letter pairs are compared directly;
+// only non-ASCII runes, the Kelvin sign and long s among them, walk their
+// simple-fold orbit.
 func simpleFoldMatchAt(haystack, needle string, start int) bool {
 	haystack = haystack[start:]
 	for len(needle) != 0 {
 		if len(haystack) == 0 {
 			return false
+		}
+		if h, n := haystack[0], needle[0]; h < utf8.RuneSelf && n < utf8.RuneSelf {
+			if h != n && (h|0x20 != n|0x20 || h|0x20 < 'a' || h|0x20 > 'z') {
+				return false
+			}
+			haystack, needle = haystack[1:], needle[1:]
+			continue
 		}
 		h, hSize := utf8.DecodeRuneInString(haystack)
 		n, nSize := utf8.DecodeRuneInString(needle)
