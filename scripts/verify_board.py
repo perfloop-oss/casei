@@ -85,10 +85,15 @@ def verify(path, pinned=PINNED, family=None):
     one family when family is set."""
     header, cells = parse(path)
     seed, tiers = load_pinned(pinned)
-    tiers = {n: t for n, t in tiers.items() if family is None or n.startswith(family + "/")}
+    if family is not None:
+        if family not in {n.split("/")[0] for n in tiers}:
+            raise VerificationError(f"--family {family!r} is not a pinned family")
+        tiers = {n: t for n, t in tiers.items() if n.split("/")[0] == family}
     failures = [f"host: {k}={header.get(k)}, want {v}" for k, v in HOST.items() if header.get(k) != v]
     if int(header["seed"], 0) != seed:
         failures.append(f"seed={header['seed']} is not the pinned seed {seed:#x}")
+    if not cells:
+        failures.append("the run has no cells")
     if set(cells) != set(tiers):
         failures.append(f"cells differ from {Path(pinned).name}: missing={sorted(set(tiers) - set(cells))}, "
                         f"unexpected={sorted(set(cells) - set(tiers))}")

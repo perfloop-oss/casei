@@ -102,5 +102,13 @@ class VerifyBoardTest(unittest.TestCase):
         self.assertFails(transcript(only="density/", **{family("density")[1]: {"drop": "pcre2"}}), "pcre2_active=0", "density")
 
 
+    def test_family_must_be_a_pinned_family(self):
+        run = transcript(only="density/")
+        for bad in ("nosuch", "", "densit", "case/ci"):
+            with self.assertRaisesRegex(verify.VerificationError, "is not a pinned family"):
+                self.verify(run, bad)
+        self.assertFails(HEADER, "the run has no cells")
+
+
 if __name__ == "__main__":
     unittest.main()
