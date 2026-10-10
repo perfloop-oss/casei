@@ -62,11 +62,10 @@ baselines:
     semantic_status: exact-for-ascii
     what: Direct pinned Rust aho-corasick 1.1.5 C ABI, DFA with ASCII case
           insensitivity, LeftmostFirst ordering, and enabled prefilter. A
-          checked memchr source patch records the backend reached by each
-          exact query; only an observed AVX2 query enters x_vs_best. An
-          unobserved, SSE, or scalar query remains available to semantic tests
-          but is excluded rather than inferred from Go CPU flags. Original
-          pattern IDs are retained.
+          checked memchr source patch records the memchr backend reached by
+          each query as a diagnostic. The entrant counts on every ASCII row
+          whatever width it reports, since the audit cannot see its Teddy
+          path (#29, #31). Original pattern IDs are retained.
 
   - name: aho-corasick
     tier: [ascii]
@@ -103,10 +102,10 @@ baselines:
     semantic_status: exact
     what: rust-regex through the pinned rure C API with (?i) and Unicode mode.
           A checked source patch records the memchr backend reached by each
-          query; only an observed AVX2 query enters x_vs_best. An unobserved,
-          SSE, or scalar query remains available to semantic tests but is
-          excluded rather than labeled from Go CPU flags. Literals and ordered
-          capture alternations are compiled once and checked against the oracle.
+          query as a diagnostic. The entrant counts on every row whatever
+          width it reports, since the audit cannot see its Teddy path (#29,
+          #31). Literals and ordered capture alternations are compiled once
+          and checked against the oracle.
 
   - name: vectorscan
     tier: [ascii, utf8]

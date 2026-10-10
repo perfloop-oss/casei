@@ -35,6 +35,7 @@ import (
 	ac "github.com/petar-dambovaliev/aho-corasick"
 
 	"github.com/tsenart/casei"
+	"github.com/tsenart/casei/arena/board"
 )
 
 type multiScenario struct {
@@ -118,7 +119,7 @@ func rawTransitionCorpus(bytes int, lateMatch bool) string {
 var multiScenarios = func() []multiScenario {
 	logs1m := buildLogCorpus(1 << 20)
 	prose1m := buildProseCorpus(1 << 20)
-	cyr1m := buildWordCorpus(cyrillicWords, 1<<20)
+	cyr1m := buildCyrillicCorpus(1 << 20)
 
 	hit8 := []string{
 		"fatal panic", "segfault detected", "oom killed", "disk full",
@@ -216,7 +217,7 @@ func foldAll(patterns []string, utf8Tier bool) []string {
 	out := make([]string, len(patterns))
 	for i, p := range patterns {
 		if utf8Tier {
-			out[i] = canonFoldString(p)
+			out[i] = board.FoldString(p)
 		} else {
 			out[i] = asciiLower(p)
 		}
@@ -362,7 +363,7 @@ func BenchmarkMatcher(b *testing.B) {
 		}
 		lh := s.haystack
 		if s.utf8 {
-			lh = canonFoldString(s.haystack)
+			lh = board.FoldString(s.haystack)
 		} else {
 			lh = asciiLower(s.haystack)
 		}

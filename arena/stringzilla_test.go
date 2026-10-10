@@ -2,8 +2,12 @@ package arena_test
 
 import (
 	"fmt"
+	"math/rand/v2"
+	"slices"
+	"strings"
 	"testing"
 
+	"github.com/tsenart/casei/arena/board"
 	stringzilla "github.com/tsenart/casei/arena/stringzilla"
 )
 
@@ -151,6 +155,42 @@ func TestStringZillaAlternationHazardsAgree(t *testing.T) {
 		want, wantOK := refFind(tc.haystack, tc.patterns)
 		if ok != wantOK || (ok && (start != want.Start || pattern != want.Pattern)) {
 			t.Errorf("Find(%q, %q) = {%d %d},%v want %+v,%v", tc.haystack, tc.patterns, pattern, start, ok, want, wantOK)
+		}
+	}
+}
+
+// TestStringZillaEachAgrees holds the batched Each to the board's pure-Go
+// oracle, with full-fold expansions (ß and ss) that its candidates must reject
+// and haystacks long enough to need several batches.
+func TestStringZillaEachAgrees(t *testing.T) {
+	if !stringZillaAvailable {
+		t.Skip("StringZilla AVX-512 entrant is excluded on this process")
+	}
+	alphabet := []rune("sSßẞkKKσςΣaжЖ ")
+	rng := rand.New(rand.NewPCG(20261010, 1))
+	random := func(n int) string {
+		var b strings.Builder
+		for range n {
+			b.WriteRune(alphabet[rng.IntN(len(alphabet))])
+		}
+		return b.String()
+	}
+	for iteration := range 500 {
+		haystack, patterns := random(rng.IntN(2000)), make([]string, 1+rng.IntN(5))
+		for i := range patterns {
+			patterns[i] = random(1 + rng.IntN(3))
+		}
+		m, err := stringzilla.CompileAlternation(patterns)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []board.Hit
+		m.Each(haystack, func(start, pattern, width int) bool {
+			got = append(got, board.Hit{Start: start, Pattern: pattern, Width: width})
+			return true
+		})
+		if want := board.Matches(haystack, patterns, false); !slices.Equal(got, want) {
+			t.Fatalf("iteration %d: Each(%q, %q) = %v, oracle %v", iteration, haystack, patterns, got, want)
 		}
 	}
 }

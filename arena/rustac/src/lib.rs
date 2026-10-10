@@ -158,3 +158,35 @@ pub unsafe extern "C" fn casei_ac_find(
         None => 0,
     }
 }
+
+/// Writes up to `cap` (start, end, pattern) triples of consecutive
+/// non-overlapping matches from `start` into `out`, from find_iter, and returns
+/// how many it wrote, or -1 on bad input or an empty pattern.
+#[no_mangle]
+pub unsafe extern "C" fn casei_ac_each(
+    matcher: *const Matcher,
+    haystack: *const u8,
+    length: usize,
+    start: usize,
+    out: *mut usize,
+    cap: usize,
+) -> isize {
+    if matcher.is_null() || out.is_null() || (length != 0 && haystack.is_null()) || start > length {
+        return -1;
+    }
+    let matcher = &*matcher;
+    if matcher.empty.is_some() {
+        return -1;
+    }
+    let Some(ac) = &matcher.ac else { return 0 };
+    let haystack = if length == 0 { &[][..] } else { std::slice::from_raw_parts(haystack, length) };
+    let out = std::slice::from_raw_parts_mut(out, 3 * cap);
+    let mut n = 0;
+    for found in ac.find_iter(aho_corasick::Input::new(haystack).span(start..length)).take(cap) {
+        out[3 * n] = found.start();
+        out[3 * n + 1] = found.end();
+        out[3 * n + 2] = matcher.ids[found.pattern().as_usize()];
+        n += 1;
+    }
+    n as isize
+}

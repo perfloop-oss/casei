@@ -41,6 +41,7 @@ jobs:
         working-directory: audit/rebar/runner
       - run: python3 audit/rebar/prepare_test.py
       - run: python3 scripts/verify_benchmarkbar_test.py
+      - run: python3 scripts/verify_board_test.py
       - run: python3 scripts/verify_throughput_test.py
 
   arena:
@@ -64,6 +65,7 @@ jobs:
             "PKG_CONFIG_SYSROOT_DIR=$native/root" \
             "LD_LIBRARY_PATH=$native/root/usr/lib/x86_64-linux-gnu" \
             >> "$GITHUB_ENV"
+      - run: sh audit/rebar/haystacks.sh audit/rebar/haystacks
       - run: go vet ./...
         working-directory: arena
       # The agreement tests are the gate that keeps a baseline honest: every

@@ -140,6 +140,25 @@ the field. Two ways to produce one, both of which have happened here:
   `/ceiling`). Those lanes exist for profiling. Reporting `/candidate` borrows
   the arena's authority for a number that never looked at the field.
 
+### The generality board
+
+`BenchmarkBoard` times every cell pinned in `arena/board/cells.txt`. Eight
+families each sweep one property -- pattern count, pattern length, script,
+case mode, corpus, match density, haystack size, operation -- and draw the
+rest. `casei` must answer every cell. The board passes on Sapphire Rapids
+(GenuineIntel family 6 model 143, AVX-512F/BW/VBMI) when every family's mean
+`x_vs_best` is below 1.0 and no cell is above 1.10, with every supporting
+entrant timed:
+
+```
+sh ../audit/rebar/haystacks.sh ../audit/rebar/haystacks
+go test -run '^$' -bench '^BenchmarkBoard$' -benchtime 1x | tee board.txt
+python3 ../scripts/verify_board.py board.txt
+```
+
+Iterate on the families a change touches, with `-bench 'BenchmarkBoard/<family>/'`
+and `verify_board.py --family <family>`; the full board is the landing check.
+
 ### Landing a change
 
 The acceptance bar below is the bar for a published result, not for each
@@ -154,7 +173,15 @@ change. A change lands on `master` when:
    section 8 defect needs no speedup: the same comparison shows that the rows
    whose route it changes do not slow;
 3. no `BenchmarkBar` row that is below 1.0 on `master` reaches 1.0 on that
-   host.
+   host;
+4. a performance change shows the `verify_board.py` family aggregates for
+   `master` and the change on that host: the families it improves, and no
+   family aggregate higher than `master` by more than the spread between two
+   `master` runs on the same host.
+
+An eligibility bound (pattern count, length, input size) comes from a stated
+cost model, not from the shape of a measured row. Prefer one general route that
+covers a family over another widened bound.
 
 A change may land while a target row still loses to the field. Report the row's
 `x_vs_best`, name it as losing, and say what remains. Improvements land one at

@@ -35,6 +35,39 @@ static int casei_pcre2_jit_match_8(const pcre2_code_8 *code, const char *subject
 		0, 0, match_data, NULL);
 }
 
+// casei_pcre2_each_8 writes up to cap (start, end, pattern) triples of
+// consecutive non-overlapping matches from start into out, in one native call,
+// and returns how many it wrote, or a negative PCRE2 error.
+static long casei_pcre2_each_8(const pcre2_code_8 *code, const char *subject,
+	size_t length, size_t start, int captures, pcre2_match_data_8 *match_data,
+	size_t *out, size_t cap) {
+	size_t n = 0;
+	while (n < cap && start <= length) {
+		int result = pcre2_jit_match_8(code, (PCRE2_SPTR8)subject, (PCRE2_SIZE)length,
+			(PCRE2_SIZE)start, 0, match_data, NULL);
+		if (result == PCRE2_ERROR_NOMATCH) {
+			break;
+		}
+		if (result < 0) {
+			return result;
+		}
+		PCRE2_SIZE *ovector = pcre2_get_ovector_pointer_8(match_data);
+		size_t pattern = 0;
+		for (int group = 1; group <= captures; group++) {
+			if (ovector[2 * group] != PCRE2_UNSET) {
+				pattern = (size_t)(group - 1);
+				break;
+			}
+		}
+		out[3 * n] = ovector[0];
+		out[3 * n + 1] = ovector[1];
+		out[3 * n + 2] = pattern;
+		n++;
+		start = ovector[1] > ovector[0] ? ovector[1] : ovector[1] + 1;
+	}
+	return (long)n;
+}
+
 static int casei_pcre2_is_nomatch_8(int result) {
 	return result == PCRE2_ERROR_NOMATCH;
 }
@@ -69,7 +102,11 @@ type Regex struct {
 
 type matchData struct {
 	ptr *C.pcre2_match_data_8
+	out [3 * eachBatch]C.size_t // Each's match buffer
 }
+
+// eachBatch is how many matches Each collects per native call.
+const eachBatch = 256
 
 var empty = [1]byte{}
 
@@ -185,4 +222,32 @@ func (re *Regex) Index(haystack string) int {
 		return -1
 	}
 	return start
+}
+
+// Each calls yield with the start, pattern index and byte width of each
+// consecutive non-overlapping match, as casei's Matcher.Each orders them. The
+// matching loop runs in C and returns matches in batches, so enumeration costs
+// one native call per batch rather than one per match. It returns false when
+// yield stops it.
+func (re *Regex) Each(haystack string, yield func(start, pattern, width int) bool) bool {
+	data := re.matches.Get().(*matchData)
+	defer re.matches.Put(data)
+	for at := 0; ; {
+		n := int(C.casei_pcre2_each_8(re.code, pointer(haystack), C.size_t(len(haystack)), C.size_t(at),
+			C.int(re.captures), data.ptr, &data.out[0], eachBatch))
+		runtime.KeepAlive(haystack)
+		if n < 0 {
+			panic(fmt.Sprintf("PCRE2 JIT match failed: code %d", n))
+		}
+		for i := range n {
+			start, end := int(data.out[3*i]), int(data.out[3*i+1])
+			if !yield(start, int(data.out[3*i+2]), end-start) {
+				return false
+			}
+			at = end
+		}
+		if n < eachBatch {
+			return true
+		}
+	}
 }

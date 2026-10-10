@@ -39,90 +39,29 @@ package arena_test
 //                what caseless search costs if folding were free
 
 import (
-	"fmt"
 	"math/rand/v2"
 	"regexp"
 	"strings"
 	"testing"
-	"unicode"
-	"unicode/utf8"
 
 	veloz "github.com/mhr3/veloz/ascii"
 
 	"github.com/tsenart/casei"
+	"github.com/tsenart/casei/arena/board"
 )
 
 // ---- corpora (deterministic; no testdata files) ----------------------------
 
 func corpusRNG() *rand.Rand { return rand.New(rand.NewPCG(0xCA5E1, 0xA12E9A)) }
 
-var logLevels = []string{"DEBUG", "INFO", "INFO", "INFO", "WARN", "ERROR"}
-var logServices = []string{"checkout", "search", "ingest", "billing", "Gateway", "AuthZ", "replicator"}
-var logMessages = []string{
-	"request completed", "cache miss", "retry scheduled", "connection reset by peer",
-	"slow query detected", "Payment Authorized", "token refreshed", "queue depth high",
-	"compaction finished", "TLS handshake complete", "rate limit applied",
+// The corpus builders live in package board, which draws them per cell; the
+// fixed scenarios below pass corpusRNG so their bytes never change.
+func buildLogCorpus(size int) string   { return board.Logs(corpusRNG(), size) }
+func buildProseCorpus(size int) string { return board.Prose(corpusRNG(), size) }
+func buildCodeCorpus(size int) string  { return board.Code(corpusRNG(), size) }
+func buildCyrillicCorpus(size int) string {
+	return board.Russian(corpusRNG(), size)
 }
-
-func buildLogCorpus(size int) string {
-	rng := corpusRNG()
-	var b strings.Builder
-	b.Grow(size + 256)
-	for b.Len() < size {
-		fmt.Fprintf(&b, "2026-08-04T%02d:%02d:%02d.%03dZ %s service=%s region=eu-west-%d trace=%08x%08x msg=%q latency_ms=%d\n",
-			rng.IntN(24), rng.IntN(60), rng.IntN(60), rng.IntN(1000),
-			logLevels[rng.IntN(len(logLevels))],
-			logServices[rng.IntN(len(logServices))],
-			1+rng.IntN(3), rng.Uint32(), rng.Uint32(),
-			logMessages[rng.IntN(len(logMessages))],
-			rng.IntN(2000))
-	}
-	return b.String()[:size]
-}
-
-var proseWords = strings.Fields(`the of and to in a is that it was for on are with as his they at be
-this have from or one had by word but not what all were we when your can said there use an each which
-she do how their if will up other about out many then them these so some her would make like him into
-time has look two more write go see number no way could people my than first water been call who oil
-its now find long down day did get come made may part over new sound take only little work know place
-year live me back give most very after thing our just name good sentence man think say great where
-help through much before line right too mean old any same tell boy follow came want show also around
-form three small set put end does another well large must big even such because turn here why ask went
-men read need land different home us move try kind hand picture again change off play spell air away
-animal house point page letter mother answer found study still learn should America world`)
-
-var cyrillicWords = strings.Fields(`доктор ватсон улица бейкер лондон туман дело улика письмо газета
-вечер утро дверь окно комната огонь свеча тень шаг голос вопрос ответ время город река мост камень
-дождь ветер ночь свет тайна встреча друг враг правда история конец начало Инспектор Лестрейд`)
-
-func buildWordCorpus(words []string, size int) string {
-	rng := corpusRNG()
-	var b strings.Builder
-	b.Grow(size + 128)
-	for b.Len() < size {
-		n := 6 + rng.IntN(9)
-		for i := 0; i < n; i++ {
-			w := words[rng.IntN(len(words))]
-			if i == 0 {
-				r, sz := utf8.DecodeRuneInString(w)
-				w = string(unicode.ToUpper(r)) + w[sz:]
-			}
-			if i > 0 {
-				b.WriteByte(' ')
-			}
-			b.WriteString(w)
-		}
-		b.WriteString(". ")
-	}
-	s := b.String()
-	// Trim to size at a rune boundary so corpora stay valid UTF-8.
-	for size > 0 && size < len(s) && s[size]&0xC0 == 0x80 {
-		size--
-	}
-	return s[:size]
-}
-
-func buildProseCorpus(size int) string { return buildWordCorpus(proseWords, size) }
 
 func buildASCIIOnlyPartitionCorpus(size int) string {
 	data := []byte(strings.Repeat("x", size))
@@ -130,20 +69,6 @@ func buildASCIIOnlyPartitionCorpus(size int) string {
 		copy(data[at:], "ſK")
 	}
 	return string(data)
-}
-
-func buildCodeCorpus(size int) string {
-	rng := corpusRNG()
-	var b strings.Builder
-	b.Grow(size + 256)
-	for b.Len() < size {
-		id := rng.IntN(10000)
-		fmt.Fprintf(&b, "func handleReq%d(ctx context.Context, in []byte) (map[string]int, error) {\n", id)
-		fmt.Fprintf(&b, "\tout := make(map[string]int, %d)\n\tfor i, v := range in {\n", rng.IntN(64))
-		fmt.Fprintf(&b, "\t\tif v&0x%02x != 0 {\n\t\t\tout[keys[i%%%d]] += int(v)\n\t\t}\n\t}\n", rng.IntN(256), 1+rng.IntN(16))
-		fmt.Fprintf(&b, "\tif len(out) == 0 {\n\t\treturn nil, fmt.Errorf(\"empty%d: %%w\", errSentinel)\n\t}\n\treturn out, nil\n}\n\n", id)
-	}
-	return b.String()[:size]
 }
 
 // plant returns corpus with occ case-flipped copies of needle spliced in at
@@ -184,7 +109,7 @@ var scenarios = func() []scenario {
 	logs1m := buildLogCorpus(1 << 20)
 	prose1m := buildProseCorpus(1 << 20)
 	code256k := buildCodeCorpus(256 << 10)
-	cyr1m := buildWordCorpus(cyrillicWords, 1<<20)
+	cyr1m := buildCyrillicCorpus(1 << 20)
 
 	return []scenario{
 		// ASCII tier: miss-heavy scans, full-haystack throughput.
@@ -387,8 +312,8 @@ func BenchmarkIndexFold(b *testing.B) {
 		// implementation is judged against (see CONTEXT.md).
 		ceiling := s
 		if s.utf8 {
-			ceiling.haystack = canonFoldString(s.haystack)
-			ceiling.needle = canonFoldString(s.needle)
+			ceiling.haystack = board.FoldString(s.haystack)
+			ceiling.needle = board.FoldString(s.needle)
 		} else {
 			ceiling.haystack = asciiLower(s.haystack)
 			ceiling.needle = asciiLower(s.needle)
