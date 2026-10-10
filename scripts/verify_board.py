@@ -3,7 +3,9 @@
 
 - The run is on Sapphire Rapids: GenuineIntel family 6 model 143 with
   AVX-512F/BW/VBMI.
-- It measured exactly the cells pinned in arena/board/cells.txt.
+- It measured exactly the cells pinned in arena/board/cells.txt, or with
+  --family, exactly that family's cells, for iterating on one family; the
+  full board is the acceptance check.
 - casei answers every cell, and every pinned entrant that supports a cell was
   timed. (BenchmarkBoard fails a cell outright on any wrong answer.)
 - A cell's x_vs_best is its largest entrant ratio, casei's time over that of
@@ -78,10 +80,12 @@ def supported(name, tier):
     return out
 
 
-def verify(path, pinned=PINNED):
-    """Return (summary lines, failures) for a transcript."""
+def verify(path, pinned=PINNED, family=None):
+    """Return (summary lines, failures) for a transcript of the board, or of
+    one family when family is set."""
     header, cells = parse(path)
     seed, tiers = load_pinned(pinned)
+    tiers = {n: t for n, t in tiers.items() if family is None or n.startswith(family + "/")}
     failures = [f"host: {k}={header.get(k)}, want {v}" for k, v in HOST.items() if header.get(k) != v]
     if int(header["seed"], 0) != seed:
         failures.append(f"seed={header['seed']} is not the pinned seed {seed:#x}")
@@ -117,9 +121,10 @@ def verify(path, pinned=PINNED):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("transcript", type=Path)
+    parser.add_argument("--family", help="verify one family's run instead of the whole board")
     args = parser.parse_args()
     try:
-        lines, failures = verify(args.transcript)
+        lines, failures = verify(args.transcript, family=args.family)
     except (OSError, VerificationError) as err:
         print(f"FAIL: {err}", file=sys.stderr)
         raise SystemExit(1)

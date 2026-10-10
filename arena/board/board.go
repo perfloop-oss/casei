@@ -157,7 +157,14 @@ func draw(familyName string, l level, index int) Spec {
 	s.Sensitive = familyName == "case" && l.label == "cs"
 	s.Corpus = pick("corpus").label
 	s.Spacing = pick("density").lo
-	size := pick("size")
+	// Only the size family sweeps 64 B to 16 MiB. Other families draw from
+	// 4 KiB to 256 KiB: large enough to exercise their property past per-call
+	// setup, small enough that every operation fits inside the pairing's 25 ms
+	// windows, so a cell costs its windows and not its input.
+	size := level{lo: 4 << 10, hi: 256 << 10}
+	if familyName == "size" {
+		size = l
+	}
 	s.Size = int(math.Round(float64(size.lo) * math.Pow(float64(size.hi)/float64(size.lo), rng.Float64())))
 	s.First = math.Round(rng.Float64()*100) / 100
 	return s
@@ -165,9 +172,11 @@ func draw(familyName string, l level, index int) Spec {
 
 // Cell is a built cell.
 type Cell struct {
-	Patterns []string
-	Haystack string
-	ASCII    bool // patterns and haystack are all ASCII
+	Patterns  []string
+	Haystack  string
+	ASCII     bool // patterns and haystack are all ASCII
+	Rewritten int  // patterns absent() had to rewrite to keep them out of the text
+	Natural   int  // patterns that still occur in the text outside planted matches
 }
 
 //go:embed cells.txt
@@ -198,29 +207,32 @@ func (c Cell) Digest() string {
 // Build materializes the cell. Patterns are cut from the cell's corpus
 // (English for ASCII patterns in Russian text), so they read like the text
 // they are searched in; a non-ASCII pattern cut from ASCII text gets a rune
-// from the pool. Patterns that occur in the text are mutated until they do
-// not, so every match is a planted one: the first at First, the rest one per
-// Spacing bytes after it.
+// from the pool. absent keeps them out of the text, so the matches are the
+// planted ones: the first at First, the rest one per Spacing bytes after it.
 func (s Spec) Build() Cell {
 	rng := rngFor(s.key(), 1)
 	text := s.Corpus
 	if text == "russian" {
 		text = "prose"
 	}
-	patterns := make([]string, s.Count)
-	for i := range patterns {
+	cuts := make([]func() string, s.Count)
+	lengths := make([]int, s.Count)
+	for i := range cuts {
 		nonASCII := rng.IntN(100) < s.NonASCII
 		source := text
 		if nonASCII {
 			source = s.Corpus
 		}
-		patterns[i] = samplePattern(rng, corpus(rng, source, 64<<10), s.LenLo+rng.IntN(s.LenHi-s.LenLo+1), nonASCII)
+		src, n := corpus(rng, source, 64<<10), s.LenLo+rng.IntN(s.LenHi-s.LenLo+1)
+		cuts[i], lengths[i] = func() string { return samplePattern(rng, src, n, nonASCII) }, n
 	}
-	planted, total := plants(rng, patterns, s)
+	planted, total := plants(rng, lengths, s)
 	base := corpus(rng, s.Corpus, max(s.Size-total, 0))
-	absent(rng, patterns, base, s.Sensitive)
-	ascii := isASCII(base) && !slices.ContainsFunc(patterns, func(p string) bool { return !isASCII(p) })
-	return Cell{Patterns: patterns, Haystack: plant(rng, base, planted, patterns, s, ascii), ASCII: ascii}
+	c := Cell{}
+	c.Patterns, c.Rewritten, c.Natural = absent(rng, cuts, base, s.Sensitive)
+	c.ASCII = isASCII(base) && !slices.ContainsFunc(c.Patterns, func(p string) bool { return !isASCII(p) })
+	c.Haystack = plant(rng, base, planted, c.Patterns, s, c.ASCII)
+	return c
 }
 
 // pool holds the runes that stand in for ASCII in non-ASCII patterns cut from
@@ -243,23 +255,26 @@ var pool = func() []rune {
 }()
 
 // samplePattern cuts a pattern of exactly n bytes from src at a random rune
-// boundary. Runes that do not fit the remaining length, or are non-ASCII in an
-// ASCII pattern, become ASCII letters. A non-ASCII pattern that came out all
-// ASCII gets one rune from the pool, trimmed and padded back to n bytes.
+// boundary, skipping runes that do not fit the remaining length or, in an
+// ASCII pattern, are not ASCII. A non-ASCII pattern that came out all ASCII
+// gets one rune from the pool, and is trimmed and refilled from src.
 func samplePattern(rng *rand.Rand, src string, n int, nonASCII bool) string {
 	at := rng.IntN(len(src))
 	for src[at]&0xC0 == 0x80 {
 		at--
 	}
-	var runes []rune
-	for bytes := 0; bytes < n; {
-		r, size := utf8.DecodeRuneInString(src[at:])
-		at = (at + size) % len(src)
-		if utf8.RuneLen(r) > n-bytes || !nonASCII && r >= utf8.RuneSelf {
-			r = rune('a' + rng.IntN(26))
+	next := func(room int) rune {
+		for {
+			r, size := utf8.DecodeRuneInString(src[at:])
+			at = (at + size) % len(src)
+			if size <= room && (nonASCII || size == 1) {
+				return r
+			}
 		}
-		runes = append(runes, r)
-		bytes += utf8.RuneLen(r)
+	}
+	var runes []rune
+	for len(string(runes)) < n {
+		runes = append(runes, next(n-len(string(runes))))
 	}
 	if nonASCII && isASCII(string(runes)) {
 		j, r := rng.IntN(len(runes)), pool[rng.IntN(len(pool))]
@@ -276,7 +291,7 @@ func samplePattern(rng *rand.Rand, src string, n int, nonASCII bool) string {
 			runes = slices.Delete(runes, k, k+1)
 		}
 		for len(string(runes)) < n {
-			runes = append(runes, rune('a'+rng.IntN(26)))
+			runes = append(runes, next(1))
 		}
 	}
 	return string(runes)
@@ -292,9 +307,9 @@ func isASCII(s string) bool {
 }
 
 // plants draws the planted occurrences: one at First, then one per Spacing
-// bytes of the rest of the haystack. It returns their patterns and total
-// pattern bytes, which the corpus draw leaves room for.
-func plants(rng *rand.Rand, patterns []string, s Spec) ([]int, int) {
+// bytes of the rest of the haystack. It returns their pattern indexes and
+// total pattern bytes, which the corpus draw leaves room for.
+func plants(rng *rand.Rand, lengths []int, s Spec) ([]int, int) {
 	if s.Spacing == 0 {
 		return nil, 0
 	}
@@ -306,12 +321,12 @@ func plants(rng *rand.Rand, patterns []string, s Spec) ([]int, int) {
 	var planted []int
 	total := 0
 	for range count {
-		i := rng.IntN(len(patterns))
-		if total+len(patterns[i]) > s.Size {
+		i := rng.IntN(len(lengths))
+		if total+lengths[i] > s.Size {
 			break
 		}
 		planted = append(planted, i)
-		total += len(patterns[i])
+		total += lengths[i]
 	}
 	return planted, total
 }
@@ -365,11 +380,15 @@ func variant(rng *rand.Rand, p string, s Spec, ascii bool) string {
 // predates the case pairs Unicode added from version 8 on (Cherokee, Osage,
 // Georgian Mtavruli, Adlam, and others). They stay out of timing cells, where
 // they would disqualify an entrant; the oracle tests keep them.
-var unfolded = [][2]rune{
-	{0x026A, 0x026A}, {0x0282, 0x0282}, {0x029D, 0x029D}, {0x10D0, 0x10FF}, {0x13A0, 0x13FD},
-	{0x1C80, 0x1CBF}, {0x1D8E, 0x1D8E}, {0x2C2F, 0x2C2F}, {0x2C5F, 0x2C5F}, {0xA64A, 0xA64B},
-	{0xA794, 0xA794}, {0xA7AE, 0xA7D9}, {0xA7F5, 0xA7F6}, {0xAB53, 0xAB53}, {0xAB70, 0xABBF},
-	{0x104B0, 0x104FB}, {0x10570, 0x105BC}, {0x10C80, 0x10CF2}, {0x16E40, 0x16E7F}, {0x1E900, 0x1E943},
+var unfolded = [][2]rune{ // 693 mates
+	{0x026A, 0x026A}, {0x0282, 0x0282}, {0x029D, 0x029D}, {0x10D0, 0x10FA}, {0x10FD, 0x10FF},
+	{0x13A0, 0x13F5}, {0x13F8, 0x13FD}, {0x1C80, 0x1C88}, {0x1C90, 0x1CBA}, {0x1CBD, 0x1CBF},
+	{0x1D8E, 0x1D8E}, {0x2C2F, 0x2C2F}, {0x2C5F, 0x2C5F}, {0xA64A, 0xA64B}, {0xA794, 0xA794},
+	{0xA7AE, 0xA7AE}, {0xA7B2, 0xA7CA}, {0xA7D0, 0xA7D1}, {0xA7D6, 0xA7D9}, {0xA7F5, 0xA7F6},
+	{0xAB53, 0xAB53}, {0xAB70, 0xABBF}, {0x104B0, 0x104D3}, {0x104D8, 0x104FB}, {0x10570, 0x1057A},
+	{0x1057C, 0x1058A}, {0x1058C, 0x10592}, {0x10594, 0x10595}, {0x10597, 0x105A1}, {0x105A3, 0x105B1},
+	{0x105B3, 0x105B9}, {0x105BB, 0x105BC}, {0x10C80, 0x10CB2}, {0x10CC0, 0x10CF2}, {0x16E40, 0x16E7F},
+	{0x1E900, 0x1E943},
 }
 
 // HazardMates returns r and every member of its simple-fold orbit that all
@@ -384,29 +403,53 @@ func HazardMates(r rune) []rune {
 	return mates
 }
 
-// absent mutates each pattern that occurs in text until it does not, by
-// swapping one rune for a random rune of the same byte width from printable
-// ASCII and the pool, which keeps the pattern's length and script.
-func absent(rng *rand.Rand, patterns []string, text string, sensitive bool) {
+// absent returns patterns that do not occur in text, so that density and the
+// first match are what the cell draws. It draws fresh cuts until one is
+// absent. When none is, it rewrites runes with frequent runes of the same
+// width sampled from text, which keeps the pattern's length, script, and byte
+// distribution. When that fails too (short patterns of common runes), the
+// pattern keeps its natural matches. It reports how many patterns it rewrote
+// and how many keep natural matches.
+func absent(rng *rand.Rand, cuts []func() string, text string, sensitive bool) ([]string, int, int) {
 	key := func(s string) string { return s }
 	if !sensitive {
 		key = FoldString
 	}
-	text = key(text)
-	swaps := map[int][]rune{}
-	for r := rune(' '); r <= '~'; r++ {
-		swaps[1] = append(swaps[1], r)
-	}
-	for _, r := range pool {
-		swaps[utf8.RuneLen(r)] = append(swaps[utf8.RuneLen(r)], r)
-	}
-	for i, p := range patterns {
-		runes := []rune(p)
-		for try := 0; try < 1024 && strings.Contains(text, key(string(runes))); try++ {
-			j := rng.IntN(len(runes))
-			same := swaps[utf8.RuneLen(runes[j])]
-			runes[j] = same[rng.IntN(len(same))]
+	folded := key(text)
+	present := func(p string) bool { return strings.Contains(folded, key(p)) }
+	frequent := func(width int) rune {
+		for range 64 {
+			at := rng.IntN(len(text))
+			for text[at]&0xC0 == 0x80 {
+				at--
+			}
+			if r, size := utf8.DecodeRuneInString(text[at:]); size == width {
+				return r
+			}
 		}
-		patterns[i] = string(runes)
+		return utf8.RuneError
 	}
+	patterns, rewritten, natural := make([]string, len(cuts)), 0, 0
+	for i, cut := range cuts {
+		p := cut()
+		for try := 0; try < 64 && present(p); try++ {
+			p = cut()
+		}
+		if present(p) && len(text) > 0 {
+			rewritten++
+			runes := []rune(p)
+			for try := 0; try < 64 && present(string(runes)); try++ {
+				j := rng.IntN(len(runes))
+				if r := frequent(utf8.RuneLen(runes[j])); r != utf8.RuneError {
+					runes[j] = r
+				}
+			}
+			p = string(runes)
+		}
+		if present(p) {
+			natural++
+		}
+		patterns[i] = p
+	}
+	return patterns, rewritten, natural
 }

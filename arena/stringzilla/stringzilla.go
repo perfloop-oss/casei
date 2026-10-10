@@ -185,8 +185,11 @@ func (a *Alternation) Find(haystack string) (start, pattern int, ok bool) {
 	bestStart, bestPattern := -1, -1
 	for pattern, m := range a.matchers {
 		scope := haystack
-		if bestStart >= 0 && bestStart+utf8.UTFMax*m.runes < len(haystack) {
-			scope = haystack[:bestStart+utf8.UTFMax*m.runes]
+		if end := bestStart + utf8.UTFMax*m.runes; bestStart >= 0 && end < len(haystack) {
+			for haystack[end]&0xC0 == 0x80 {
+				end++ // keep the last rune whole
+			}
+			scope = haystack[:end]
 		}
 		start := m.Index(scope)
 		if start >= 0 && (bestStart < 0 || start < bestStart || (start == bestStart && pattern < bestPattern)) {
@@ -226,4 +229,46 @@ func simpleFoldEqual(a, b rune) bool {
 		}
 	}
 	return false
+}
+
+// Each calls yield with the start, pattern index and byte width of each
+// consecutive non-overlapping match, leftmost first, ties to the lowest index.
+// StringZilla searches one literal at a time, so Each keeps each literal's next
+// occurrence and searches a literal again only once the enumeration has passed
+// it: a rare literal is not rescanned after every match of a common one. A
+// match spans its pattern's runes, since simple folding maps rune to rune.
+func (a *Alternation) Each(haystack string, yield func(start, pattern, width int) bool) bool {
+	next := make([]int, len(a.matchers))
+	search := func(i, at int) {
+		next[i] = -1
+		if j := a.matchers[i].Index(haystack[at:]); j >= 0 {
+			next[i] = at + j
+		}
+	}
+	for i := range next {
+		search(i, 0)
+	}
+	for at := 0; ; {
+		best := -1
+		for i := range next {
+			if next[i] >= 0 && next[i] < at {
+				search(i, at)
+			}
+			if next[i] >= 0 && (best < 0 || next[i] < next[best]) {
+				best = i
+			}
+		}
+		if best < 0 {
+			return true
+		}
+		end := next[best]
+		for range a.matchers[best].runes {
+			_, size := utf8.DecodeRuneInString(haystack[end:])
+			end += size
+		}
+		if !yield(next[best], best, end-next[best]) {
+			return false
+		}
+		at = end
+	}
 }

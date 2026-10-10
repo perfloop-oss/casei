@@ -105,8 +105,7 @@ func Code(rng *rand.Rand, size int) string {
 }
 
 // texts are the board's real text: Rebar haystacks pinned by sha256 in
-// audit/rebar/haystacks.sh, which fetches them. They are read from
-// $CASEI_REBAR_HAYSTACKS, or audit/rebar/haystacks in this repository.
+// audit/rebar/haystacks.sh, which fetches them into audit/rebar/haystacks.
 var texts = map[string][]string{
 	"prose":   {"imported/leipzig-3200.txt", "sherlock.txt", "opensubtitles/en-sampled.txt", "opensubtitles/en-huge.txt"},
 	"russian": {"opensubtitles/ru-sampled.txt", "opensubtitles/ru-huge.txt"},
@@ -118,11 +117,8 @@ func text(name string) string {
 	if t, ok := loaded.Load(name); ok {
 		return t.(string)
 	}
-	dir := os.Getenv("CASEI_REBAR_HAYSTACKS")
-	if dir == "" {
-		_, file, _, _ := runtime.Caller(0)
-		dir = filepath.Join(filepath.Dir(file), "..", "..", "audit", "rebar", "haystacks")
-	}
+	_, file, _, _ := runtime.Caller(0)
+	dir := filepath.Join(filepath.Dir(file), "..", "..", "audit", "rebar", "haystacks")
 	var parts []string
 	for _, f := range texts[name] {
 		data, err := os.ReadFile(filepath.Join(dir, f))

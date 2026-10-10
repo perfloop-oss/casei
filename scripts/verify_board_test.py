@@ -26,8 +26,8 @@ def line(name, ratio=0.5, supported=1, drop=None, extra=None, faster=None):
     return f"BenchmarkBoard/{name}-8 1 1000 ns/op {supported} candidate_supported {metrics}\n"
 
 
-def transcript(header=HEADER, skip=(), **per_cell):
-    return header + "".join(line(n, **per_cell.get(n, {})) for n in NAMES if n not in skip)
+def transcript(header=HEADER, skip=(), only="", **per_cell):
+    return header + "".join(line(n, **per_cell.get(n, {})) for n in NAMES if n not in skip and n.startswith(only))
 
 
 def family(prefix):
@@ -35,14 +35,14 @@ def family(prefix):
 
 
 class VerifyBoardTest(unittest.TestCase):
-    def verify(self, text):
+    def verify(self, text, family=None):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "board.txt"
             path.write_text(text)
-            return verify.verify(path)
+            return verify.verify(path, family=family)
 
-    def assertFails(self, text, fragment):
-        failures = self.verify(text)[1]
+    def assertFails(self, text, fragment, family=None):
+        failures = self.verify(text, family)[1]
         self.assertTrue(any(fragment in f for f in failures), failures)
 
     def test_accepts_a_winning_board(self):
@@ -90,6 +90,16 @@ class VerifyBoardTest(unittest.TestCase):
 
     def test_rejects_wrong_host(self):
         self.assertFails(transcript(header=HEADER.replace("model=143", "model=106")), "host: model=106")
+
+
+    def test_verifies_one_family(self):
+        run = transcript(only="density/")
+        self.assertEqual(self.verify(run, "density")[1], [])
+        self.assertFails(run, "cells differ from cells.txt")  # not the board
+        self.assertFails(transcript(only="density/", skip={family("density")[0]}), "cells differ", "density")
+        cells = {n: {"ratio": 1.05 if i % 2 else 0.95} for i, n in enumerate(family("density"))}
+        self.assertFails(transcript(only="density/", **cells), "density: aggregate", "density")
+        self.assertFails(transcript(only="density/", **{family("density")[1]: {"drop": "pcre2"}}), "pcre2_active=0", "density")
 
 
 if __name__ == "__main__":

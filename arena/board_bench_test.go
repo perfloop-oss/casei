@@ -218,25 +218,35 @@ func boardEntrant(name string, patterns []string, asciiTier bool) (boardEngine, 
 		if !stringZillaAvailable {
 			return boardEngine{}, false, nil
 		}
-		alternation, err := stringzilla.CompileAlternation(patterns)
+		m, err := stringzilla.CompileAlternation(patterns)
 		if err != nil {
 			return boardEngine{}, true, err
 		}
-		literals := make([]func(string) int, len(patterns))
-		for i, p := range patterns {
-			m, _ := stringzilla.CompileLiteral(p) // CompileAlternation compiled it
-			literals[i] = m.Index
-		}
-		return boardEngine{find: alternation.Find, each: literalsEach(literals, patterns)}, true, nil
+		return boardEngine{find: m.Find, each: m.Each}, true, nil
 	case "veloz":
 		if !asciiTier || !single || velozVectorBits() != 256 {
 			return boardEngine{}, false, nil
 		}
-		index := func(h string) int { return veloz.IndexFold(h, patterns[0]) }
-		return boardEngine{
-			find: func(h string) (int, int, bool) { i := index(h); return i, 0, i >= 0 },
-			each: literalsEach([]func(string) int{index}, patterns),
-		}, true, nil
+		// veloz has no iterator, so Each restarts IndexFold after each match.
+		needle, runes := patterns[0], utf8.RuneCountInString(patterns[0])
+		find := func(h string) (int, int, bool) { i := veloz.IndexFold(h, needle); return i, 0, i >= 0 }
+		return boardEngine{find: find, each: func(h string, yield func(int, int, int) bool) bool {
+			for at := 0; ; {
+				i, _, ok := find(h[at:])
+				if !ok {
+					return true
+				}
+				end := at + i
+				for range runes {
+					_, size := utf8.DecodeRuneInString(h[end:])
+					end += size
+				}
+				if !yield(at+i, 0, end-at-i) {
+					return false
+				}
+				at = end
+			}
+		}}, true, nil
 	case "rustac":
 		if !asciiTier {
 			return boardEngine{}, false, nil
@@ -265,53 +275,6 @@ func (e boardEngine) bind(name, op, h string) boardRun {
 			visit(board.Hit{Start: start, Pattern: pattern, Width: -1})
 		}
 	}}
-}
-
-// literalsEach enumerates a pattern set with an engine that searches one
-// literal at a time. It keeps each literal's next occurrence and searches a
-// literal again only once the enumeration has passed it, so a rare literal is
-// not rescanned after every match of a common one. A match spans its
-// pattern's runes, since simple folding maps rune to rune.
-func literalsEach(index []func(string) int, patterns []string) func(string, func(int, int, int) bool) bool {
-	runes := make([]int, len(patterns))
-	for i, p := range patterns {
-		runes[i] = utf8.RuneCountInString(p)
-	}
-	next := make([]int, len(index))
-	return func(h string, yield func(start, pattern, width int) bool) bool {
-		search := func(i, at int) {
-			next[i] = -1
-			if j := index[i](h[at:]); j >= 0 {
-				next[i] = at + j
-			}
-		}
-		for i := range next {
-			search(i, 0)
-		}
-		for at := 0; ; {
-			best := -1
-			for i := range next {
-				if next[i] >= 0 && next[i] < at {
-					search(i, at)
-				}
-				if next[i] >= 0 && (best < 0 || next[i] < next[best]) {
-					best = i
-				}
-			}
-			if best < 0 {
-				return true
-			}
-			end := next[best]
-			for range runes[best] {
-				_, size := utf8.DecodeRuneInString(h[end:])
-				end += size
-			}
-			if !yield(next[best], best, end-next[best]) {
-				return false
-			}
-			at = end
-		}
-	}
 }
 
 // boardHost names the CPU for the verifier's host rule: vendor, family, and

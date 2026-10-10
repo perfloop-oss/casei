@@ -156,6 +156,9 @@ go test -run '^$' -bench '^BenchmarkBoard$' -benchtime 1x | tee board.txt
 python3 ../scripts/verify_board.py board.txt
 ```
 
+Iterate on the families a change touches, with `-bench 'BenchmarkBoard/<family>/'`
+and `verify_board.py --family <family>`; the full board is the landing check.
+
 ### Landing a change
 
 The acceptance bar below is the bar for a published result, not for each
@@ -173,7 +176,8 @@ change. A change lands on `master` when:
    host;
 4. a performance change shows the `verify_board.py` family aggregates for
    `master` and the change on that host: the families it improves, and no
-   family aggregate higher by more than 0.02.
+   family aggregate higher than `master` by more than the spread between two
+   `master` runs on the same host.
 
 An eligibility bound (pattern count, length, input size) comes from a stated
 cost model, not from the shape of a measured row. Prefer one general route that
