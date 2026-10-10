@@ -14,12 +14,15 @@ void casei_ac_free(casei_ac_matcher *matcher);
 void casei_ac_error_free(char *error);
 int casei_ac_find(const casei_ac_matcher *matcher, const uint8_t *haystack,
     size_t length, size_t *start, size_t *pattern, uint32_t *dispatch_bits);
+long casei_ac_each(const casei_ac_matcher *matcher, const uint8_t *haystack,
+    size_t length, size_t start, size_t *out, size_t cap);
 */
 import "C"
 
 import (
 	"fmt"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"unsafe"
 )
@@ -129,5 +132,37 @@ func (m *Matcher) Find(haystack string) (start, pattern int, ok bool) {
 		return int(foundStart), int(foundPattern), true
 	default:
 		panic("Rust Aho-Corasick scan failed")
+	}
+}
+
+// eachBatch is how many matches Each collects per native call.
+const eachBatch = 256
+
+var eachBuffers = sync.Pool{New: func() any { return new([3 * eachBatch]C.size_t) }}
+
+// Each calls yield with the start, pattern index and byte width of each
+// consecutive non-overlapping match, from aho-corasick's own find_iter. Matches
+// come back in batches, so enumeration costs one native call per batch rather
+// than one per match. It returns false when yield stops it. Empty patterns are
+// outside its contract.
+func (m *Matcher) Each(haystack string, yield func(start, pattern, width int) bool) bool {
+	out := eachBuffers.Get().(*[3 * eachBatch]C.size_t)
+	defer eachBuffers.Put(out)
+	for at := 0; ; {
+		n := int(C.casei_ac_each(m.ptr, pointer(haystack), C.size_t(len(haystack)), C.size_t(at), &out[0], eachBatch))
+		runtime.KeepAlive(haystack)
+		if n < 0 {
+			panic("Rust Aho-Corasick Each failed or has an empty pattern")
+		}
+		for i := range n {
+			start, end := int(out[3*i]), int(out[3*i+1])
+			if !yield(start, int(out[3*i+2]), end-start) {
+				return false
+			}
+			at = end
+		}
+		if n < eachBatch {
+			return true
+		}
 	}
 }

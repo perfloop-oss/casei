@@ -3,7 +3,11 @@ package board
 import (
 	"fmt"
 	"math/rand/v2"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"unicode"
 	"unicode/utf8"
 )
@@ -98,4 +102,63 @@ func Code(rng *rand.Rand, size int) string {
 		fmt.Fprintf(&b, "\tif len(out) == 0 {\n\t\treturn nil, fmt.Errorf(\"empty%d: %%w\", errSentinel)\n\t}\n\treturn out, nil\n}\n\n", id)
 	}
 	return b.String()[:size]
+}
+
+// texts are the board's real text: Rebar haystacks pinned by sha256 in
+// audit/rebar/haystacks.sh, which fetches them. They are read from
+// $CASEI_REBAR_HAYSTACKS, or audit/rebar/haystacks in this repository.
+var texts = map[string][]string{
+	"prose":   {"imported/leipzig-3200.txt", "sherlock.txt", "opensubtitles/en-sampled.txt", "opensubtitles/en-huge.txt"},
+	"russian": {"opensubtitles/ru-sampled.txt", "opensubtitles/ru-huge.txt"},
+}
+
+var loaded sync.Map // name -> string
+
+func text(name string) string {
+	if t, ok := loaded.Load(name); ok {
+		return t.(string)
+	}
+	dir := os.Getenv("CASEI_REBAR_HAYSTACKS")
+	if dir == "" {
+		_, file, _, _ := runtime.Caller(0)
+		dir = filepath.Join(filepath.Dir(file), "..", "..", "audit", "rebar", "haystacks")
+	}
+	var parts []string
+	for _, f := range texts[name] {
+		data, err := os.ReadFile(filepath.Join(dir, f))
+		if err != nil {
+			panic(fmt.Sprintf("board: %v; run audit/rebar/haystacks.sh audit/rebar/haystacks", err))
+		}
+		parts = append(parts, string(data))
+	}
+	t, _ := loaded.LoadOrStore(name, strings.Join(parts, "\n"))
+	return t.(string)
+}
+
+// corpus returns n bytes of the named corpus, give or take a rune: a window of
+// real text from a random rune boundary, wrapping around at its end, or the
+// synthetic code and log builders.
+func corpus(rng *rand.Rand, name string, n int) string {
+	switch name {
+	case "code":
+		return Code(rng, n)
+	case "logs":
+		return Logs(rng, n)
+	}
+	t := text(name)
+	at := rng.IntN(len(t))
+	for t[at]&0xC0 == 0x80 {
+		at--
+	}
+	var b strings.Builder
+	for b.Len() < n {
+		take := min(n-b.Len(), len(t)-at)
+		b.WriteString(t[at : at+take])
+		at = 0
+	}
+	s := b.String()
+	for r, size := utf8.DecodeLastRuneInString(s); r == utf8.RuneError && size == 1; r, size = utf8.DecodeLastRuneInString(s) {
+		s = s[:len(s)-1]
+	}
+	return s
 }

@@ -142,14 +142,16 @@ the field. Two ways to produce one, both of which have happened here:
 
 ### The generality board
 
-`BenchmarkBoard` times the 200 cells pinned in `arena/board/cells.txt`. Eight
+`BenchmarkBoard` times every cell pinned in `arena/board/cells.txt`. Eight
 families each sweep one property -- pattern count, pattern length, script,
 case mode, corpus, match density, haystack size, operation -- and draw the
-rest. It passes on the performance host when every family's mean `x_vs_best`
-is below 1.0 and no cell is above 1.10, with every supporting entrant timed and
-every answer matching the oracle:
+rest. `casei` must answer every cell. The board passes on Sapphire Rapids
+(GenuineIntel family 6 model 143, AVX-512F/BW/VBMI) when every family's mean
+`x_vs_best` is below 1.0 and no cell is above 1.10, with every supporting
+entrant timed:
 
 ```
+sh ../audit/rebar/haystacks.sh ../audit/rebar/haystacks
 go test -run '^$' -bench '^BenchmarkBoard$' -benchtime 1x | tee board.txt
 python3 ../scripts/verify_board.py board.txt
 ```
@@ -169,8 +171,9 @@ change. A change lands on `master` when:
    whose route it changes do not slow;
 3. no `BenchmarkBar` row that is below 1.0 on `master` reaches 1.0 on that
    host;
-4. a performance change shows, against `master`, the `BenchmarkBoard`
-   families it improves and no family regression beyond noise.
+4. a performance change shows the `verify_board.py` family aggregates for
+   `master` and the change on that host: the families it improves, and no
+   family aggregate higher by more than 0.02.
 
 An eligibility bound (pattern count, length, input size) comes from a stated
 cost model, not from the shape of a measured row. Prefer one general route that

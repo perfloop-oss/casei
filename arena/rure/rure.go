@@ -35,6 +35,41 @@ static int casei_rure_captures_at(rure_captures *captures, size_t index,
 	return rure_captures_at(captures, index, match) ? 1 : 0;
 }
 
+// casei_rure_each writes up to cap (start, end, pattern) triples of
+// consecutive non-overlapping matches from start into out, in one native call,
+// and returns how many it wrote. A capture set selects the matched branch.
+static size_t casei_rure_each(rure *re, const uint8_t *haystack, size_t length,
+		size_t start, rure_captures *captures, size_t groups, size_t *out, size_t cap) {
+	size_t n = 0;
+	rure_match match;
+	while (n < cap && start <= length) {
+		size_t pattern = 0;
+		if (captures == NULL) {
+			if (!rure_find(re, haystack, length, start, &match)) {
+				break;
+			}
+		} else {
+			if (!rure_find_captures(re, haystack, length, start, captures)) {
+				break;
+			}
+			rure_captures_at(captures, 0, &match);
+			rure_match branch;
+			for (size_t group = 1; group <= groups; group++) {
+				if (rure_captures_at(captures, group, &branch)) {
+					pattern = group - 1;
+					break;
+				}
+			}
+		}
+		out[3 * n] = match.start;
+		out[3 * n + 1] = match.end;
+		out[3 * n + 2] = pattern;
+		n++;
+		start = match.end > match.start ? match.end : match.end + 1;
+	}
+	return n;
+}
+
 static size_t casei_rure_match_start(const rure_match *match) {
 	return match->start;
 }
@@ -163,6 +198,45 @@ func pointer(s string) *C.uint8_t {
 		return (*C.uint8_t)(unsafe.Pointer(&empty[0]))
 	}
 	return (*C.uint8_t)(unsafe.Pointer(unsafe.StringData(s)))
+}
+
+// eachBatch is how many matches Each collects per native call.
+const eachBatch = 256
+
+var eachBuffers = sync.Pool{New: func() any { return new([3 * eachBatch]C.size_t) }}
+
+// Each calls yield with the start, pattern index and byte width of each
+// consecutive non-overlapping match, as casei's Matcher.Each orders them. The
+// matching loop runs in C and returns matches in batches, so enumeration costs
+// one native call per batch rather than one per match. It returns false when
+// yield stops it.
+func (re *Regex) Each(haystack string, yield func(start, pattern, width int) bool) bool {
+	if re == nil || re.re == nil {
+		return true
+	}
+	out := eachBuffers.Get().(*[3 * eachBatch]C.size_t)
+	defer eachBuffers.Put(out)
+	var captures *C.rure_captures
+	if re.captures > 0 {
+		c := re.pool.Get().(*capture)
+		defer re.pool.Put(c)
+		captures = c.ptr
+	}
+	for at := 0; ; {
+		n := int(C.casei_rure_each(re.re, pointer(haystack), C.size_t(len(haystack)), C.size_t(at),
+			captures, C.size_t(re.captures), &out[0], eachBatch))
+		runtime.KeepAlive(haystack)
+		for i := range n {
+			start, end := int(out[3*i]), int(out[3*i+1])
+			if !yield(start, int(out[3*i+2]), end-start) {
+				return false
+			}
+			at = end
+		}
+		if n < eachBatch {
+			return true
+		}
+	}
 }
 
 // Find returns the leftmost byte start and, for an alternation, the selected

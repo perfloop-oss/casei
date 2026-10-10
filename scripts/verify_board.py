@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
 """Fail unless a BenchmarkBoard transcript satisfies the generality board's rules.
 
-- The run is on the performance host: GenuineIntel family 6 model 143 with
+- The run is on Sapphire Rapids: GenuineIntel family 6 model 143 with
   AVX-512F/BW/VBMI.
 - It measured exactly the cells pinned in arena/board/cells.txt.
 - casei answers every cell, and every pinned entrant that supports a cell was
-  timed. An entrant reported wrong fails the run: the board plants only fold
-  mates every entrant handles, so a wrong answer is a board or adapter bug.
-- Each cell's x_vs_best is its largest entrant ratio, and no cell is above 1.10.
+  timed. (BenchmarkBoard fails a cell outright on any wrong answer.)
+- A cell's x_vs_best is its largest entrant ratio, casei's time over that of
+  the fastest entrant; no cell is above 1.10.
 - Every family's aggregate x_vs_best is below 1.0. Cells weigh equally, so the
   aggregate is the mean of the family's x_vs_best: casei's total time over the
-  fastest entrant's, with each cell normalized to its fastest entrant.
+  fastest entrants', with each cell normalized to its fastest entrant.
 """
 
 import argparse
 from collections import defaultdict
-import math
 from pathlib import Path
 import re
 import sys
@@ -34,9 +33,15 @@ class VerificationError(ValueError):
 
 
 def load_pinned(path=PINNED):
-    """Return (seed, cell names) from the pinned cells file."""
-    lines = [l for l in Path(path).read_text().splitlines() if l and not l.startswith("#")]
-    return int(lines[0].removeprefix("seed="), 0), [l.split()[0] for l in lines[1:]]
+    """Return (seed, {cell name: tier}) from the pinned cells file."""
+    seed, tiers = None, {}
+    for line in Path(path).read_text().splitlines():
+        if line.startswith("seed="):
+            seed = int(line[5:], 0)
+        elif line and not line.startswith("#"):
+            name, tier, _ = line.split()
+            tiers[name] = tier
+    return seed, tiers
 
 
 def parse(path):
@@ -54,9 +59,8 @@ def parse(path):
                 raise VerificationError(f"{path}:{number}: {name} appears twice")
             values = dict(zip(fields[3::2], fields[2::2]))  # unit -> value, after the name and N
             try:
-                cells[name] = {unit: float(values[unit]) for unit in
-                               ("x_vs_best", "candidate_supported", "ascii_tier",
-                                *(f"{e}_{m}" for e in ENTRANTS for m in ("active", "x", "wrong")))}
+                cells[name] = {u: float(values[u]) for u in
+                               ("candidate_supported", *(f"{e}_{m}" for e in ENTRANTS for m in ("active", "x")))}
             except (KeyError, ValueError) as err:
                 raise VerificationError(f"{path}:{number}: missing or invalid metric {err}") from err
     if header is None or "seed" not in header:
@@ -64,56 +68,48 @@ def parse(path):
     return header, cells
 
 
-def supported(name, cell):
+def supported(name, tier):
     """Return the entrants that support a cell, from field.yaml's tiers."""
     out = {"regexp", "pcre2", "rure", "vectorscan", "stringzilla"}
-    if cell["ascii_tier"] == 1:
+    if tier == "ascii":
         out.add("rustac")
         if "/n=1," in name:
             out.add("veloz")
     return out
 
 
-def check_cell(name, cell):
-    """Return the rule failures of one cell."""
-    if cell["candidate_supported"] != 1:
-        return [f"{name}: casei does not support this cell"]
-    failures, want = [], supported(name, cell)
-    for e in ENTRANTS:
-        if cell[f"{e}_wrong"]:
-            failures.append(f"{name}: {e} answered wrongly; a board or adapter bug")
-        elif cell[f"{e}_active"] != (e in want):
-            failures.append(f"{name}: {e}_active={cell[f'{e}_active']:g}, want {int(e in want)}")
-    worst = max((cell[f"{e}_x"] for e in ENTRANTS if cell[f"{e}_active"] == 1), default=0)
-    if cell["x_vs_best"] <= 0 or not math.isclose(cell["x_vs_best"], worst, rel_tol=1e-6):
-        failures.append(f"{name}: x_vs_best={cell['x_vs_best']:g} is not the largest entrant ratio {worst:g}")
-    if cell["x_vs_best"] > CELL_LIMIT:
-        failures.append(f"{name}: x_vs_best={cell['x_vs_best']:.4f} is above the {CELL_LIMIT} cell limit")
-    return failures
-
-
 def verify(path, pinned=PINNED):
     """Return (summary lines, failures) for a transcript."""
     header, cells = parse(path)
-    seed, names = load_pinned(pinned)
+    seed, tiers = load_pinned(pinned)
     failures = [f"host: {k}={header.get(k)}, want {v}" for k, v in HOST.items() if header.get(k) != v]
     if int(header["seed"], 0) != seed:
         failures.append(f"seed={header['seed']} is not the pinned seed {seed:#x}")
-    if set(cells) != set(names):
-        failures.append(f"cells differ from {Path(pinned).name}: missing={sorted(set(names) - set(cells))}, "
-                        f"unexpected={sorted(set(cells) - set(names))}")
+    if set(cells) != set(tiers):
+        failures.append(f"cells differ from {Path(pinned).name}: missing={sorted(set(tiers) - set(cells))}, "
+                        f"unexpected={sorted(set(cells) - set(tiers))}")
     families = defaultdict(list)
     for name, cell in sorted(cells.items()):
-        failures.extend(check_cell(name, cell))
-        families[name.split("/")[0]].append(cell)
-    lines = [f"seed={header['seed']} cells={len(cells)}", "family    cells  answered  aggregate"]
-    for family, members in families.items():
-        answered = [c["x_vs_best"] for c in members if c["candidate_supported"] == 1]
-        aggregate = sum(answered) / len(answered) if answered else math.nan
-        lines.append(f"{family:<9} {len(members):>5} {len(answered):>9} {aggregate:>10.4f}")
-        if len(answered) < len(members):
-            failures.append(f"{family}: {len(members) - len(answered)} of {len(members)} cells unanswered by casei")
-        elif aggregate >= AGGREGATE_LIMIT:
+        x = None
+        if cell["candidate_supported"] != 1:
+            failures.append(f"{name}: casei does not support this cell")
+        else:
+            want = supported(name, tiers.get(name))
+            failures += [f"{name}: {e}_active={cell[f'{e}_active']:g}, want {int(e in want)}"
+                         for e in ENTRANTS if cell[f"{e}_active"] != (e in want)]
+            x = max((cell[f"{e}_x"] for e in ENTRANTS if cell[f"{e}_active"] == 1), default=0)
+            if not 0 < x <= CELL_LIMIT:
+                failures.append(f"{name}: x_vs_best={x:.4f} is outside (0, {CELL_LIMIT}]")
+        families[name.split("/")[0]].append(x)
+    lines = [f"seed={header['seed']} cells={len(cells)}", "family    cells  aggregate x_vs_best"]
+    for family, xs in families.items():
+        if None in xs:
+            failures.append(f"{family}: {xs.count(None)} of {len(xs)} cells unanswered by casei")
+            lines.append(f"{family:<9} {len(xs):>5}  unanswered")
+            continue
+        aggregate = sum(xs) / len(xs)
+        lines.append(f"{family:<9} {len(xs):>5}  {aggregate:.4f}")
+        if aggregate >= AGGREGATE_LIMIT:
             failures.append(f"{family}: aggregate x_vs_best={aggregate:.4f} is not below {AGGREGATE_LIMIT}")
     return lines, failures
 

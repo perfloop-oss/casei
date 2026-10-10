@@ -48,6 +48,7 @@ import (
 // arena contract, so it is part of the timed baseline.
 type Matcher struct {
 	needle   string
+	runes    int // the needle's runes; a match spans at most utf8.UTFMax bytes each
 	metadata C.sz_utf8_uncased_needle_metadata_t
 }
 
@@ -89,7 +90,7 @@ func CompileLiteral(needle string) (*Matcher, error) {
 		return nil, fmt.Errorf("StringZilla Ice Lake AVX-512 path is unavailable")
 	}
 
-	m := &Matcher{needle: needle}
+	m := &Matcher{needle: needle, runes: utf8.RuneCountInString(needle)}
 	if C.casei_stringzilla_prepare(pointer(needle), C.size_t(len(needle)), &m.metadata) == 0 {
 		runtime.KeepAlive(needle)
 		return nil, fmt.Errorf("StringZilla failed to prepare needle metadata")
@@ -175,13 +176,19 @@ func (m *Matcher) Index(haystack string) int {
 
 // Find returns the leftmost match from this alternation, ties to the lowest
 // pattern ID. All native scans and this reduction are timed as the adapter.
+// Once a literal has matched, a later literal can only win by starting before
+// that match, so its scan ends where such a match must end.
 func (a *Alternation) Find(haystack string) (start, pattern int, ok bool) {
 	if a == nil {
 		return 0, 0, false
 	}
 	bestStart, bestPattern := -1, -1
 	for pattern, m := range a.matchers {
-		start := m.Index(haystack)
+		scope := haystack
+		if bestStart >= 0 && bestStart+utf8.UTFMax*m.runes < len(haystack) {
+			scope = haystack[:bestStart+utf8.UTFMax*m.runes]
+		}
+		start := m.Index(scope)
 		if start >= 0 && (bestStart < 0 || start < bestStart || (start == bestStart && pattern < bestPattern)) {
 			bestStart, bestPattern = start, pattern
 		}

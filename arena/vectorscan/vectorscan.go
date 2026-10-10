@@ -391,9 +391,12 @@ func pointer(s string) *C.char {
 	return (*C.char)(unsafe.Pointer(unsafe.StringData(s)))
 }
 
-// Find scans the whole subject because Vectorscan reports every match. The
-// callback reduces those reports to this package's contract: leftmost start,
-// then lowest supplied pattern index. It panics on a scan failure so an
+// Find scans the whole subject because Vectorscan reports every match, and its
+// developer reference guarantees no report order ("Lack of ordering",
+// doc/dev-reference/compilation.rst): no report proves that an earlier start
+// cannot still follow, so the scan cannot stop early. The callback reduces the
+// reports to this package's contract: leftmost start, then lowest supplied
+// pattern index. It panics on a scan failure so an
 // accelerated baseline cannot silently turn into a slow fallback.
 func (m *Matcher) Find(haystack string) (start, pattern int, ok bool) {
 	if m == nil {
@@ -441,8 +444,8 @@ func (m *Matcher) Index(haystack string) int {
 // Each calls yield for the non-overlapping matches of casei's Matcher.Each:
 // leftmost start first, ties to the lowest pattern index, the next match
 // starting at or after the previous match's end. Vectorscan reports every
-// match in no guaranteed order, so one scan collects all reports and the
-// adapter sorts and reduces them. Both are part of the timed baseline. Each
+// match in no guaranteed order, so a reduction cannot stream: one scan collects
+// all reports and the adapter sorts and reduces them. Both are part of the timed baseline. Each
 // returns false when yield stops it. Empty patterns are outside its contract.
 func (m *Matcher) Each(haystack string, yield func(start, pattern, width int) bool) bool {
 	if m == nil || m.database == nil {
