@@ -145,12 +145,11 @@ func rngFor(seed uint64, name string, stream uint64) *rand.Rand {
 	return rand.New(rand.NewPCG(seed, h.Sum64()^stream))
 }
 
-// draw fixes the family's property at its level and draws every other one.
-// Two pairs of properties constrain each other: IndexFold searches for one
-// pattern, and a one-byte pattern cannot contain a non-ASCII rune.
-// Case-sensitive cells appear only in the case family. casei has no
-// case-sensitive API yet, and drawing case mode everywhere would fail every
-// family on that one gap and hide what each family measures.
+// draw fixes the family's property at its level and draws every other one,
+// redrawing until the cell is coherent: IndexFold searches for one pattern, and
+// a one-byte pattern cannot hold a non-ASCII rune. Case-sensitive cells appear
+// only in the case family: casei has no case-sensitive API yet, and drawing
+// case mode everywhere would fail every family on that one gap.
 func draw(seed uint64, familyName string, l level, index int) Spec {
 	s := Spec{Family: familyName, Level: l.label, Index: index, seed: seed}
 	rng := rngFor(seed, s.key(), 0)
@@ -162,38 +161,22 @@ func draw(seed uint64, familyName string, l level, index int) Spec {
 		return levels[rng.IntN(len(levels))]
 	}
 	within := func(l level) int { return l.lo + rng.IntN(l.hi-l.lo+1) }
-
-	if familyName == "op" {
-		s.Op = l.label
-	}
-	if s.Op == "indexfold" {
-		s.Count = 1
-	} else {
+	for {
+		s.Op = pick("op").label
 		s.Count = within(pick("count"))
-	}
-	if s.Op == "" {
-		ops := []string{"find", "each"}
-		if s.Count == 1 {
-			ops = append(ops, "indexfold")
-		}
-		s.Op = ops[rng.IntN(len(ops))]
-	}
-	length := pick("length")
-	s.NonASCII = pick("script").label == "nonascii"
-	if s.NonASCII && length.hi < 2 {
-		if familyName == "length" {
-			s.NonASCII = false
-		} else {
-			length = countLevels[1+rng.IntN(len(countLevels)-1)]
+		length := pick("length")
+		s.LenLo, s.LenHi = length.lo, length.hi
+		s.NonASCII = pick("script").label == "nonascii"
+		if (s.Op != "indexfold" || s.Count == 1) && (!s.NonASCII || s.LenLo >= 2) {
+			break
 		}
 	}
-	s.LenLo, s.LenHi = length.lo, length.hi
 	s.Sensitive = familyName == "case" && l.label == "cs"
 	s.Corpus = pick("corpus").label
 	s.Density = pick("density").label
+	// Log-uniform inside the size level, so small and large sizes of a wide
+	// level are equally likely.
 	size := pick("size")
-	// Log-uniform inside the level, so small and large sizes of a wide level
-	// are equally likely.
 	s.Size = int(math.Round(float64(size.lo) * math.Pow(float64(size.hi)/float64(size.lo), rng.Float64())))
 	return s
 }
@@ -223,52 +206,26 @@ var plantRate = map[string]float64{
 	"dense":  1.0 / 64,
 }
 
-// Build materializes the cell. Patterns are cut from independent draws of the
-// corpora, so they read like the text they are searched in and occur in it at
-// its natural rate. Density then plants fold variants of them. A "none" cell
-// mutates any pattern that still occurs until none does.
+// Build materializes the cell. Patterns are cut from an independent draw of
+// the cell's corpus (English prose for ASCII patterns in Russian text), so they
+// read like the text they are searched in and occur in it at its natural rate.
+// A non-ASCII pattern cut from ASCII text gets one non-ASCII rune. Density then
+// plants fold variants of the patterns; a "none" cell mutates any pattern that
+// still occurs until none does.
 func (s Spec) Build() Cell {
 	rng := rngFor(s.seed, s.key(), 1)
-	ascii := s.Corpus
-	if ascii == "russian" {
-		ascii = "prose" // ASCII patterns searched in Russian text
+	source := s.Corpus
+	if source == "russian" && !s.NonASCII {
+		source = "prose"
 	}
-	asciiSrc := corpora[ascii](rng, 64<<10)
-	russianSrc := Russian(rng, 64<<10)
-
+	src := corpora[source](rng, 64<<10)
 	patterns := make([]string, s.Count)
-	seen := make(map[string]bool)
 	for i := range patterns {
-		for try := 0; ; try++ {
-			n := s.LenLo + rng.IntN(s.LenHi-s.LenLo+1)
-			var p string
-			switch {
-			case !s.NonASCII:
-				p = samplePattern(rng, asciiSrc, n, 0)
-			case s.Corpus == "russian" || rng.IntN(2) == 0:
-				// Cyrillic text, or a Cyrillic phrase inside English text.
-				p = samplePattern(rng, russianSrc, n, 1)
-			default:
-				// English text with one or two accented or wider fold-mate runes.
-				p = samplePattern(rng, asciiSrc, n, 1+rng.IntN(2))
-			}
-			key := p
-			if !s.Sensitive {
-				key = FoldString(p)
-			}
-			// Distinct patterns where the length allows; a set of 64 one-byte
-			// patterns may run out of distinct bytes in the source.
-			if !seen[key] || try >= 64 {
-				seen[key] = true
-				patterns[i] = p
-				break
-			}
-		}
+		patterns[i] = samplePattern(rng, src, s.LenLo+rng.IntN(s.LenHi-s.LenLo+1), s.NonASCII)
 	}
-
 	haystack := plant(rng, patterns, s)
 	if s.Density == "none" {
-		patterns = absent(rng, patterns, haystack, asciiSrc+russianSrc, s.Sensitive)
+		absent(rng, patterns, haystack, s.Sensitive)
 	}
 	return Cell{Patterns: patterns, Haystack: haystack}
 }
@@ -279,10 +236,10 @@ func (s Spec) Build() Cell {
 var nonASCIIRunes = []rune("éèüöäßẞåÅÅøæçñµμαβγδελπσςΣΩΩжщЖЩ")
 
 // samplePattern cuts a pattern of exactly n bytes from src at a random rune
-// boundary. Non-ASCII runes that do not fit the remaining length become ASCII
-// letters. When wide is positive, the pattern then holds at least one
-// non-ASCII rune: if it has none, wide random runes are widened.
-func samplePattern(rng *rand.Rand, src string, n, wide int) string {
+// boundary. A non-ASCII rune that does not fit the remaining length becomes an
+// ASCII letter. A non-ASCII pattern that came out all ASCII gets one rune
+// widened.
+func samplePattern(rng *rand.Rand, src string, n int, nonASCII bool) string {
 	at := rng.IntN(len(src))
 	for src[at]&0xC0 == 0x80 {
 		at--
@@ -299,10 +256,8 @@ func samplePattern(rng *rand.Rand, src string, n, wide int) string {
 		runes = append(runes, r)
 		bytes += utf8.RuneLen(r)
 	}
-	if wide > 0 && isASCII(string(runes)) {
-		for range wide {
-			runes = widenAt(rng, runes, n)
-		}
+	if nonASCII && isASCII(string(runes)) {
+		runes = widenAt(rng, runes, n)
 	}
 	return string(runes)
 }
@@ -454,31 +409,6 @@ func HazardMates(r rune) []rune {
 	return mates
 }
 
-// PatternRunes lists every rune the generator can put in a pattern: printable
-// ASCII, the Russian word list in both cases, and the runes that stand in for
-// ASCII in non-ASCII patterns.
-func PatternRunes() []rune {
-	seen := map[rune]bool{}
-	for r := rune(' '); r <= '~'; r++ {
-		seen[r] = true
-	}
-	for _, w := range cyrillicWords {
-		for _, r := range w {
-			seen[unicode.ToLower(r)], seen[unicode.ToUpper(r)] = true, true
-		}
-	}
-	for _, r := range nonASCIIRunes {
-		seen[r] = true
-	}
-	seen['\u212A'], seen['\u017F'] = true, true // from widen
-	out := make([]rune, 0, len(seen))
-	for r := range seen {
-		out = append(out, r)
-	}
-	slices.Sort(out)
-	return out
-}
-
 func flipCase(rng *rand.Rand, r rune) rune {
 	if rng.IntN(2) == 0 {
 		return unicode.ToUpper(r)
@@ -486,80 +416,26 @@ func flipCase(rng *rand.Rand, r rune) rune {
 	return unicode.ToLower(r)
 }
 
-// absent returns the patterns with every one that occurs in haystack mutated
-// until it does not. A mutation swaps one rune for another rune of the same
-// byte width from the source text, which keeps the length and script. If that
-// fails, it swaps in a rune whose whole fold orbit is missing from the haystack.
-// If no such rune exists the pattern stays; the run reports the actual count.
-func absent(rng *rand.Rand, patterns []string, haystack, src string, sensitive bool) []string {
+// absent mutates each pattern that occurs in haystack until it does not, by
+// swapping one rune for a random printable rune of the same byte width. The
+// width is kept, so the pattern keeps its length and script.
+func absent(rng *rand.Rand, patterns []string, haystack string, sensitive bool) {
 	text, key := haystack, func(s string) string { return s }
 	if !sensitive {
 		text, key = FoldString(haystack), FoldString
 	}
-	present := func(p string) bool { return strings.Contains(text, key(p)) }
-	var srcRunes []rune
-	for _, r := range src {
-		srcRunes = append(srcRunes, r)
-	}
-	out := append([]string(nil), patterns...)
-	for i, p := range out {
-		for try := 0; try < 32 && present(p); try++ {
-			p = swapRune(rng, p, func(width int) (rune, bool) {
-				for range 16 {
-					if r := srcRunes[rng.IntN(len(srcRunes))]; utf8.RuneLen(r) == width {
-						return r, true
-					}
-				}
-				return 0, false
-			})
-		}
-		if present(p) {
-			missing := missingRunes(text, sensitive)
-			p = swapRune(rng, p, func(width int) (rune, bool) {
-				for _, r := range missing {
-					if utf8.RuneLen(r) == width {
-						return r, true
-					}
-				}
-				return 0, false
-			})
-		}
-		out[i] = p
-	}
-	return out
-}
-
-// swapRune replaces one random rune of p with a rune of the same width from
-// pick, leaving p unchanged when pick has none.
-func swapRune(rng *rand.Rand, p string, pick func(width int) (rune, bool)) string {
-	runes := []rune(p)
-	j := rng.IntN(len(runes))
-	if r, ok := pick(utf8.RuneLen(runes[j])); ok {
-		runes[j] = r
-	}
-	return string(runes)
-}
-
-// missingRunes lists printable runes, ASCII and nonASCIIRunes, whose fold key
-// (or, case-sensitively, the rune itself) never occurs in text.
-func missingRunes(text string, sensitive bool) []rune {
-	seen := make(map[rune]bool)
-	for _, r := range text {
-		seen[r] = true
-	}
-	var out []rune
+	swaps := append([]rune(nil), nonASCIIRunes...)
 	for r := rune('!'); r <= '~'; r++ {
-		out = append(out, r)
+		swaps = append(swaps, r)
 	}
-	out = append(out, nonASCIIRunes...)
-	missing := out[:0]
-	for _, r := range out {
-		if !sensitive {
-			r = FoldKey(r)
+	for i, p := range patterns {
+		runes := []rune(p)
+		for try := 0; try < 1024 && strings.Contains(text, key(string(runes))); try++ {
+			j, r := rng.IntN(len(runes)), swaps[rng.IntN(len(swaps))]
+			if utf8.RuneLen(r) == utf8.RuneLen(runes[j]) {
+				runes[j] = r
+			}
 		}
-		if !seen[r] {
-			missing = append(missing, r)
-		}
+		patterns[i] = string(runes)
 	}
-	return missing
 }

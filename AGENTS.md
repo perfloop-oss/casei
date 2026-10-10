@@ -142,28 +142,17 @@ the field. Two ways to produce one, both of which have happened here:
 
 ### The generality board
 
-`BenchmarkBoard`, also in `arena/`, measures the population behind the rows.
-Package `arena/board` builds 200 cells from a pinned seed. Eight families each
-sweep one property -- pattern count (1-64), pattern length (1-64 bytes), ASCII
-and non-ASCII patterns, case mode, corpus (prose, code, logs, Russian), match
-density, haystack size (64 B-16 MiB), and operation (`Find`, `Each`,
-`IndexFold`) -- and draw every other property at random. The generator, the
-seed, and every cell (`arena/board/cells.txt`) are in the repository; read them.
-Every pinned entrant that supports a cell is timed with the bar's pairing and
-counts. Cells plant ordinary case flips and only the fold mates every entrant
-folds (`board.HazardMates`); rarer orbit members belong to the semantic tests.
-Any answer that disagrees with the arena oracle, from `casei` or an entrant,
-fails the run.
+`BenchmarkBoard` times the 200 cells pinned in `arena/board/cells.txt`. Eight
+families each sweep one property -- pattern count, pattern length, script,
+case mode, corpus, match density, haystack size, operation -- and draw the
+rest. It passes on the performance host when every family's mean `x_vs_best`
+is below 1.0 and no cell is above 1.10, with every supporting entrant timed and
+every answer matching the oracle:
 
 ```
 go test -run '^$' -bench '^BenchmarkBoard$' -benchtime 1x | tee board.txt
 python3 ../scripts/verify_board.py board.txt
 ```
-
-The board passes on the performance host when every family's aggregate
-`x_vs_best` -- the equal-weight mean of its cells -- is below 1.0 and no cell is
-above 1.10. `casei` has no case-sensitive API yet. Those cells report it as
-unsupported, and the board fails until it answers them.
 
 ### Landing a change
 
@@ -180,18 +169,12 @@ change. A change lands on `master` when:
    whose route it changes do not slow;
 3. no `BenchmarkBar` row that is below 1.0 on `master` reaches 1.0 on that
    host;
-4. a performance change runs `BenchmarkBoard` for `master` and for the change,
-   and shows the board families it improves and no family whose aggregate
-   regresses beyond noise. A faster row does not show that a change is general.
+4. a performance change shows, against `master`, the `BenchmarkBoard`
+   families it improves and no family regression beyond noise.
 
-An eligibility bound -- a pattern count, a pattern length, an input size --
-comes from a stated cost model: what the route costs per byte and per pattern,
-and where that cost crosses the route it falls back to. A bound read off the
-shape of a measured row fits that row, and does not land.
-
-Prefer one general route that covers a family over another widened bound. A
-change that widens a route's eligibility by one more case says why a general
-route cannot cover the family instead.
+An eligibility bound (pattern count, length, input size) comes from a stated
+cost model, not from the shape of a measured row. Prefer one general route that
+covers a family over another widened bound.
 
 A change may land while a target row still loses to the field. Report the row's
 `x_vs_best`, name it as losing, and say what remains. Improvements land one at

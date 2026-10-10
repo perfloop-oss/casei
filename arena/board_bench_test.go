@@ -1,21 +1,18 @@
 package arena_test
 
-// The generality board. BenchmarkBar times fixed rows; BenchmarkBoard times the
-// pinned cells of package board, family by family, and pairs casei with every
-// pinned entrant that supports each cell. It uses the bar's pairing
-// (pairedRatio) and the bar's adapters. scripts/verify_board.py turns a
-// transcript into per-family aggregates and applies the board's rules.
-//
-// A run prints its seed before the first cell. -board.seed draws another
-// board for exploration; acceptance runs use the pinned board.Seed.
+// The generality board. BenchmarkBoard times the pinned cells of package
+// board and pairs casei with every pinned entrant that supports each cell,
+// using the bar's pairing (pairedRatio) and adapters. scripts/verify_board.py
+// applies the board's rules to the transcript.
 
 import (
 	"flag"
 	"fmt"
 	"os"
-	"regexp"
+	"slices"
 	"strings"
 	"testing"
+	"unicode"
 	"unicode/utf8"
 
 	veloz "github.com/mhr3/veloz/ascii"
@@ -31,134 +28,114 @@ import (
 )
 
 var boardSeed = flag.Uint64("board.seed", board.Seed,
-	"draw BenchmarkBoard from another seed, for exploration; acceptance uses the pinned board.Seed")
+	"draw BenchmarkBoard from another seed, for exploration; acceptance uses board.Seed")
 
-// boardEntrants names every field entrant that can count on a board cell, in
-// the order each cell reports them. Diagnostic entrants never count, so they
-// are not timed.
+// boardEntrants names every field entrant that can count on a board cell.
+// Diagnostic entrants never count, so they are not timed.
 var boardEntrants = []string{"regexp", "pcre2", "rure", "vectorscan", "stringzilla", "veloz", "rustac"}
 
-// BenchmarkBoard reports, per cell, x_vs_best against every supporting
-// entrant, each entrant's paired ratio, and the actual match count. Run it with
-// -benchtime 1x: the pairing does the timing, and the closing b.Loop only adds
-// casei's own ns/op as a diagnostic.
+// BenchmarkBoard reports, per cell, x_vs_best and each entrant's paired ratio.
+// Run it with -benchtime 1x: the pairing does the timing.
 func BenchmarkBoard(b *testing.B) {
-	seed := *boardSeed
-	cells := board.Cells(seed)
-	fmt.Printf("board: seed=%#x cells=%d %s\n", seed, len(cells), boardHost())
+	cells := board.Cells(*boardSeed)
+	fmt.Printf("board: seed=%#x cells=%d %s\n", *boardSeed, len(cells), boardHost())
 	for _, spec := range cells {
-		b.Run(spec.Name(), func(b *testing.B) { runBoardCell(b, seed, spec) })
+		b.Run(spec.Name(), func(b *testing.B) { runBoardCell(b, spec) })
 	}
 }
 
-func runBoardCell(b *testing.B, seed uint64, spec board.Spec) {
-	metrics := map[string]float64{}
+func runBoardCell(b *testing.B, spec board.Spec) {
+	metrics := map[string]float64{"x_vs_best": 0, "candidate_supported": 0, "ascii_tier": 0, "matches": 0}
 	for _, name := range boardEntrants {
 		metrics[name+"_active"], metrics[name+"_x"], metrics[name+"_wrong"] = 0, 0, 0
 	}
-	report := func() {
+	defer func() {
 		for unit, value := range metrics {
 			b.ReportMetric(value, unit)
 		}
-	}
+	}()
 	if spec.Sensitive {
-		// casei has no case-sensitive API. The cell stays on the board as
-		// unsupported, which fails the board until casei can answer it.
+		// casei has no case-sensitive API: the cell reports it unsupported,
+		// which fails the board until casei answers it.
 		for b.Loop() {
 		}
-		for _, unit := range []string{"x_vs_best", "competitors", "entrants", "candidate_supported", "ascii_tier", "matches", "bytes"} {
-			metrics[unit] = 0
-		}
-		report()
 		return
 	}
-
 	c, err := prepareBoardCell(spec)
 	if err == nil {
 		err = c.check()
 	}
 	if err != nil {
-		b.Fatalf("seed %#x cell %s: %v", seed, spec.Name(), err)
+		b.Fatalf("cell %s: %v", spec.Name(), err)
 	}
 	for _, w := range c.wrong {
 		metrics[w.name+"_wrong"] = 1
-		b.Logf("seed %#x: %v; not timed, and the verifier fails the run", seed, w)
+		b.Logf("%s answered wrongly (%s); the verifier fails the run", w.name, w.detail)
 	}
-	best, competitors := 0.0, 0
 	for _, e := range c.entrants {
 		ratio := pairedRatio(c.candidate.run, e.run)
 		metrics[e.name+"_active"], metrics[e.name+"_x"] = 1, ratio
-		best = max(best, ratio)
-		competitors++
+		metrics["x_vs_best"] = max(metrics["x_vs_best"], ratio)
 	}
 	for b.Loop() {
 		c.candidate.run()
 	}
-	metrics["x_vs_best"] = best
-	metrics["competitors"] = float64(competitors)
-	metrics["entrants"] = float64(competitors + 1)
 	metrics["candidate_supported"] = 1
 	metrics["ascii_tier"] = boolMetric(c.asciiTier)
-	metrics["matches"] = float64(len(c.all))
-	metrics["bytes"] = float64(len(c.cell.Haystack))
-	report()
+	metrics["matches"] = float64(len(c.want))
 }
 
-// boardCell is a built cell with casei and every supporting entrant ready to
-// run its operation.
+// boardCell is a built cell with casei and every supporting entrant bound to
+// the cell's operation, and the oracle's answer.
 type boardCell struct {
 	spec      board.Spec
 	cell      board.Cell
 	asciiTier bool        // patterns and haystack are ASCII
-	all       []board.Hit // the oracle's Each answer
+	want      []board.Hit // the oracle's Each answer
 	candidate boardRun
-	entrants  []boardRun    // supporting entrants that agree with the oracle
-	wrong     []*boardWrong // supporting entrants that do not
+	entrants  []boardRun   // supporting entrants that agree with the oracle
+	wrong     []boardWrong // supporting entrants that do not
 }
 
-// boardRun is one implementation's operation on the cell. answer reports what
-// run computes; a Pattern or Width of -1 means the entrant does not report it.
+// boardRun is one implementation's operation on the cell. scan reports each
+// hit; a Pattern or Width of -1 is one the implementation does not report.
 type boardRun struct {
-	name   string
-	run    func()
-	answer func() []board.Hit
+	name string
+	scan func(visit func(board.Hit) bool)
 }
 
-// check holds casei and every entrant to the oracle before any timing, so a
-// ratio never comes from a wrong answer. A wrong casei answer fails the cell.
-// A wrong entrant is reported on the cell as <name>_wrong and not timed, and
-// the verifier fails the run: cells plant only fold mates every entrant
-// handles (board.HazardMates), so a wrong answer is a board or adapter bug.
+func (r boardRun) run() { r.scan(func(board.Hit) bool { matcherSink++; return true }) }
+
+type boardWrong struct{ name, detail string }
+
+// check holds casei and every entrant to the oracle before any timing, so no
+// ratio comes from a wrong answer. A wrong casei answer fails the cell. A
+// wrong entrant is reported as <name>_wrong and not timed, and the verifier
+// fails the run: cells plant only fold mates every entrant handles
+// (board.HazardMates), so a wrong answer is a board or adapter bug.
 func (c *boardCell) check() error {
-	if err := c.disagreement(c.candidate); err != nil {
-		return err
+	if w := c.disagreement(c.candidate); w != nil {
+		return fmt.Errorf("casei %s", w.detail)
 	}
 	kept := c.entrants[:0]
 	for _, e := range c.entrants {
-		if err := c.disagreement(e); err != nil {
-			c.wrong = append(c.wrong, err)
-			continue
+		if w := c.disagreement(e); w != nil {
+			c.wrong = append(c.wrong, *w)
+		} else {
+			kept = append(kept, e)
 		}
-		kept = append(kept, e)
 	}
 	c.entrants = kept
 	return nil
 }
 
-// boardWrong is an entrant that disagreed with the oracle on a cell.
-type boardWrong struct {
-	name   string
-	detail string
-}
-
-func (w boardWrong) Error() string { return w.name + " " + w.detail }
-
 func (c *boardCell) disagreement(r boardRun) *boardWrong {
-	want := c.all
+	want := c.want
 	if c.spec.Op != "each" && len(want) > 1 {
 		want = want[:1]
 	}
-	got := r.answer()
+	var got []board.Hit
+	r.scan(func(h board.Hit) bool { got = append(got, h); return true })
 	if len(got) != len(want) {
 		return &boardWrong{r.name, fmt.Sprintf("gives %d matches, oracle %d", len(got), len(want))}
 	}
@@ -177,15 +154,15 @@ func prepareBoardCell(spec board.Spec) (*boardCell, error) {
 	for _, p := range cell.Patterns {
 		c.asciiTier = c.asciiTier && isASCIIText(p)
 	}
-	c.all = board.Matches(cell.Haystack, cell.Patterns, false, -1)
+	c.want = board.Matches(cell.Haystack, cell.Patterns, false)
 	c.candidate = boardCandidate(spec.Op, cell)
 	for _, name := range boardEntrants {
-		e, supported, err := boardEntrant(name, c)
+		e, supported, err := boardEntrant(name, cell.Patterns, c.asciiTier)
 		if err != nil {
 			return nil, fmt.Errorf("%s supports the cell but cannot compile it: %v", name, err)
 		}
 		if supported {
-			c.entrants = append(c.entrants, e.op(name, spec.Op, cell))
+			c.entrants = append(c.entrants, e.bind(name, spec.Op, cell))
 		}
 	}
 	return c, nil
@@ -196,84 +173,79 @@ func boardCandidate(op string, cell board.Cell) boardRun {
 	m := casei.NewMatcher(cell.Patterns)
 	switch op {
 	case "indexfold":
-		needle := cell.Patterns[0]
-		return boardRun{"casei", func() { sink = casei.IndexFold(h, needle) }, func() []board.Hit {
-			if i := casei.IndexFold(h, needle); i >= 0 {
-				return []board.Hit{{Start: i, Pattern: 0, Width: -1}}
+		return boardRun{"casei", func(visit func(board.Hit) bool) {
+			if i := casei.IndexFold(h, cell.Patterns[0]); i >= 0 {
+				visit(board.Hit{Start: i, Pattern: 0, Width: -1})
 			}
-			return nil
 		}}
 	case "each":
-		return boardRun{"casei", func() {
-			m.Each(h, func(casei.Match, int) bool { matcherSink++; return true })
-		}, func() []board.Hit {
-			var hits []board.Hit
+		return boardRun{"casei", func(visit func(board.Hit) bool) {
 			m.Each(h, func(match casei.Match, width int) bool {
-				hits = append(hits, board.Hit{Start: match.Start, Pattern: match.Pattern, Width: width})
-				return true
+				return visit(board.Hit{Start: match.Start, Pattern: match.Pattern, Width: width})
 			})
-			return hits
-		}}
-	default:
-		return boardRun{"casei", func() { _, matcherFound = m.Find(h) }, func() []board.Hit {
-			if match, ok := m.Find(h); ok {
-				return []board.Hit{{Start: match.Start, Pattern: match.Pattern, Width: -1}}
-			}
-			return nil
 		}}
 	}
+	return boardRun{"casei", func(visit func(board.Hit) bool) {
+		if match, ok := m.Find(h); ok {
+			visit(board.Hit{Start: match.Start, Pattern: match.Pattern, Width: -1})
+		}
+	}}
 }
 
-// boardEngine is an entrant compiled for one cell. find answers Find: the
-// leftmost match, ties to the lowest pattern, with -1 for a pattern the engine
-// does not report. each is the engine's own enumeration, when it has one that
-// differs from restarting find after each match.
+// boardEngine is an entrant compiled for one pattern set. find answers Find:
+// the leftmost match, ties to the lowest pattern, with -1 for what the engine
+// does not report. each is the engine's own enumeration, when restarting find
+// after each match would not be how the engine enumerates.
 type boardEngine struct {
-	find func(h string) (start, pattern int, ok bool)
-	each func(h string, visit func(start, pattern, width int) bool)
+	find func(h string) board.Hit // Start < 0: no match
+	each func(h string, visit func(board.Hit) bool)
 }
 
-// boardEntrant compiles one entrant for the cell when it supports it. The
+func hit(start, pattern int, ok bool) board.Hit {
+	if !ok {
+		return board.Hit{Start: -1}
+	}
+	return board.Hit{Start: start, Pattern: pattern, Width: -1}
+}
+
+func index(i int) board.Hit { return hit(i, 0, i >= 0) }
+
+// boardEntrant compiles one entrant when it supports the pattern set. The
 // support rules are field.yaml's tiers and the process gates BenchmarkBar
-// already applies. A supporting entrant that fails to compile is an error: it
-// is never quietly left out of the field.
-func boardEntrant(name string, c *boardCell) (boardEngine, bool, error) {
-	patterns := c.cell.Patterns
+// applies. A supporting entrant that fails to compile is an error, never a
+// silent absence.
+func boardEntrant(name string, patterns []string, asciiTier bool) (boardEngine, bool, error) {
+	single := len(patterns) == 1
 	switch name {
 	case "regexp":
 		re := regexpAltFor(patterns)
-		find := func(h string) (int, int, bool) {
+		return boardEngine{find: func(h string) board.Hit {
 			loc := re.FindStringIndex(h)
 			if loc == nil {
-				return 0, 0, false
+				return board.Hit{Start: -1}
 			}
-			return loc[0], -1, true
-		}
-		return boardEngine{find: find, each: func(h string, visit func(int, int, int) bool) { regexpEach(re, h, visit) }}, true, nil
+			return board.Hit{Start: loc[0], Pattern: -1, Width: loc[1] - loc[0]}
+		}}, true, nil
 	case "pcre2":
-		var re *pcre2jit.Regex
-		var err error
-		if len(patterns) == 1 {
-			re, err = pcre2jit.CompileLiteral(patterns[0])
-		} else {
-			re, err = pcre2jit.CompileAlternation(patterns)
+		compile := pcre2jit.CompileAlternation
+		if single {
+			compile = func(p []string) (*pcre2jit.Regex, error) { return pcre2jit.CompileLiteral(p[0]) }
 		}
+		re, err := compile(patterns)
 		if err != nil {
 			return boardEngine{}, true, err
 		}
-		return boardEngine{find: re.Find}, true, nil
+		return boardEngine{find: func(h string) board.Hit { return hit(re.Find(h)) }}, true, nil
 	case "rure":
-		var re *rure.Regex
-		var err error
-		if len(patterns) == 1 {
-			re, err = rure.CompileLiteral(patterns[0])
-		} else {
-			re, err = rure.CompileAlternation(patterns)
+		compile := rure.CompileAlternation
+		if single {
+			compile = func(p []string) (*rure.Regex, error) { return rure.CompileLiteral(p[0]) }
 		}
+		re, err := compile(patterns)
 		if err != nil {
 			return boardEngine{}, true, err
 		}
-		return boardEngine{find: re.Find}, true, nil
+		return boardEngine{find: func(h string) board.Hit { return hit(re.Find(h)) }}, true, nil
 	case "vectorscan":
 		if bits, _ := expectedVectorscanBits(); bits == 0 {
 			return boardEngine{}, false, nil
@@ -282,133 +254,105 @@ func boardEntrant(name string, c *boardCell) (boardEngine, bool, error) {
 		if err != nil {
 			return boardEngine{}, true, err
 		}
-		return boardEngine{find: m.Find, each: func(h string, visit func(int, int, int) bool) { m.Each(h, visit) }}, true, nil
+		// Vectorscan reports matches unordered and Find scans the whole input,
+		// so Each uses its one-scan enumeration.
+		return boardEngine{
+			find: func(h string) board.Hit { return hit(m.Find(h)) },
+			each: func(h string, visit func(board.Hit) bool) {
+				m.Each(h, func(start, pattern, width int) bool {
+					return visit(board.Hit{Start: start, Pattern: pattern, Width: width})
+				})
+			},
+		}, true, nil
 	case "stringzilla":
 		if !stringZillaAvailable {
 			return boardEngine{}, false, nil
 		}
-		literals := make([]*stringzilla.Matcher, len(patterns))
+		literals := make([]func(string) int, len(patterns))
 		for i, p := range patterns {
-			var err error
-			if literals[i], err = stringzilla.CompileLiteral(p); err != nil {
+			m, err := stringzilla.CompileLiteral(p)
+			if err != nil {
 				return boardEngine{}, true, err
 			}
+			literals[i] = m.Index
 		}
-		if len(patterns) == 1 {
-			return boardEngine{find: func(h string) (int, int, bool) {
-				i := literals[0].Index(h)
-				return i, 0, i >= 0
-			}}, true, nil
+		if single {
+			return boardEngine{find: func(h string) board.Hit { return index(literals[0](h)) }}, true, nil
 		}
 		alternation, err := stringzilla.CompileAlternation(patterns)
 		if err != nil {
 			return boardEngine{}, true, err
 		}
-		index := make([]func(string) int, len(literals))
-		for i, m := range literals {
-			index[i] = m.Index
-		}
-		return boardEngine{find: alternation.Find, each: literalsEach(index, patterns)}, true, nil
+		return boardEngine{
+			find: func(h string) board.Hit { return hit(alternation.Find(h)) },
+			each: literalsEach(literals, patterns),
+		}, true, nil
 	case "veloz":
-		if !c.asciiTier || len(patterns) != 1 || velozVectorBits() != 256 {
+		if !asciiTier || !single || velozVectorBits() != 256 {
 			return boardEngine{}, false, nil
 		}
-		needle := patterns[0]
-		return boardEngine{find: func(h string) (int, int, bool) {
-			i := veloz.IndexFold(h, needle)
-			return i, 0, i >= 0
-		}}, true, nil
+		return boardEngine{find: func(h string) board.Hit { return index(veloz.IndexFold(h, patterns[0])) }}, true, nil
 	case "rustac":
-		if !c.asciiTier {
+		if !asciiTier {
 			return boardEngine{}, false, nil
 		}
 		m, err := rustac.CompileAlternation(patterns)
 		if err != nil {
 			return boardEngine{}, true, err
 		}
-		return boardEngine{find: m.Find}, true, nil
+		return boardEngine{find: func(h string) board.Hit { return hit(m.Find(h)) }}, true, nil
 	}
 	panic("unknown board entrant " + name)
 }
 
-// op binds the engine to the cell's operation. IndexFold cells hold one
-// pattern, so every entrant answers them with its Find. An engine without its
-// own enumeration answers Each by restarting Find after each match, which is
-// how its Find would be used to enumerate; the match width it does not report
-// is the source span of the pattern's runes, because simple folding maps rune
-// to rune.
-func (e boardEngine) op(name, op string, cell board.Cell) boardRun {
+// bind fixes the engine to the cell's operation. IndexFold cells hold one
+// pattern, so entrants answer them with Find. Without its own enumeration an
+// engine answers Each by restarting Find after each match; a width it does not
+// report is the span of the pattern's runes, since simple folding maps rune to
+// rune.
+func (e boardEngine) bind(name, op string, cell board.Cell) boardRun {
 	h := cell.Haystack
-	each := e.each
-	if each == nil {
-		runes := make([]int, len(cell.Patterns))
-		for i, p := range cell.Patterns {
-			runes[i] = utf8.RuneCountInString(p)
-		}
-		find := e.find
-		each = func(h string, visit func(int, int, int) bool) {
-			for at := 0; at <= len(h); {
-				start, pattern, ok := find(h[at:])
-				if !ok {
-					return
-				}
-				start += at
-				width := runeSpan(h, start, runes[pattern])
-				if !visit(start, pattern, width) {
-					return
-				}
-				at = start + width
+	if op != "each" {
+		return boardRun{name, func(visit func(board.Hit) bool) {
+			if found := e.find(h); found.Start >= 0 {
+				visit(found)
 			}
-		}
-	}
-	if op == "each" {
-		return boardRun{name, func() {
-			each(h, func(int, int, int) bool { matcherSink++; return true })
-		}, func() []board.Hit {
-			var hits []board.Hit
-			each(h, func(start, pattern, width int) bool {
-				hits = append(hits, board.Hit{Start: start, Pattern: pattern, Width: width})
-				return true
-			})
-			return hits
 		}}
 	}
-	return boardRun{name, func() { _, _, matcherFound = e.find(h) }, func() []board.Hit {
-		if start, pattern, ok := e.find(h); ok {
-			return []board.Hit{{Start: start, Pattern: pattern, Width: -1}}
-		}
-		return nil
-	}}
-}
-
-// regexpEach enumerates with FindStringIndex, which reports the match end but
-// not the alternative that matched.
-func regexpEach(re *regexp.Regexp, h string, visit func(start, pattern, width int) bool) {
-	for at := 0; at <= len(h); {
-		loc := re.FindStringIndex(h[at:])
-		if loc == nil || !visit(at+loc[0], -1, loc[1]-loc[0]) {
-			return
-		}
-		at += loc[1]
+	if e.each != nil {
+		return boardRun{name, func(visit func(board.Hit) bool) { e.each(h, visit) }}
 	}
+	runes := patternRunes(cell.Patterns)
+	return boardRun{name, func(visit func(board.Hit) bool) {
+		for at := 0; at <= len(h); {
+			found := e.find(h[at:])
+			if found.Start < 0 {
+				return
+			}
+			found.Start += at
+			if found.Width < 0 {
+				found.Width = runeSpan(h, found.Start, runes[found.Pattern])
+			}
+			if !visit(found) {
+				return
+			}
+			at = found.Start + found.Width
+		}
+	}}
 }
 
 // literalsEach enumerates a pattern set with an engine that searches one
 // literal at a time. It keeps each literal's next occurrence and searches a
-// literal again only once the enumeration has passed that occurrence, so a
-// rare literal is not rescanned after every match of a common one.
-func literalsEach(index []func(string) int, patterns []string) func(string, func(int, int, int) bool) {
-	runes := make([]int, len(patterns))
-	for i, p := range patterns {
-		runes[i] = utf8.RuneCountInString(p)
-	}
+// literal again only once the enumeration has passed it, so a rare literal is
+// not rescanned after every match of a common one.
+func literalsEach(index []func(string) int, patterns []string) func(string, func(board.Hit) bool) {
+	runes := patternRunes(patterns)
 	next := make([]int, len(index))
-	return func(h string, visit func(start, pattern, width int) bool) {
+	return func(h string, visit func(board.Hit) bool) {
 		search := func(i, at int) {
+			next[i] = -1
 			if j := index[i](h[at:]); j >= 0 {
 				next[i] = at + j
-			} else {
-				next[i] = -1
 			}
 		}
 		for i := range next {
@@ -427,14 +371,21 @@ func literalsEach(index []func(string) int, patterns []string) func(string, func
 			if best < 0 {
 				return
 			}
-			start := next[best]
-			width := runeSpan(h, start, runes[best])
-			if !visit(start, best, width) {
+			width := runeSpan(h, next[best], runes[best])
+			if !visit(board.Hit{Start: next[best], Pattern: best, Width: width}) {
 				return
 			}
-			at = start + width
+			at = next[best] + width
 		}
 	}
+}
+
+func patternRunes(patterns []string) []int {
+	runes := make([]int, len(patterns))
+	for i, p := range patterns {
+		runes[i] = utf8.RuneCountInString(p)
+	}
+	return runes
 }
 
 // runeSpan returns the bytes taken by n runes of h from start.
@@ -458,37 +409,24 @@ func isASCIIText(s string) bool {
 
 // boardHost names the CPU for the verifier's host rule: vendor, family, and
 // model from /proc/cpuinfo, and the AVX-512 features this process can use.
-// The widths after them are diagnostics.
 func boardHost() string {
-	vendor, family, model := "unknown", "0", "0"
+	fields := map[string]string{"vendor_id": "unknown", "cpu family": "0", "model": "0"}
 	if data, err := os.ReadFile("/proc/cpuinfo"); err == nil {
 		for _, line := range strings.Split(string(data), "\n") {
-			key, value, ok := strings.Cut(line, ":")
-			if !ok {
-				continue
-			}
-			switch key, value = strings.TrimSpace(key), strings.TrimSpace(value); {
-			case key == "vendor_id" && vendor == "unknown":
-				vendor = value
-			case key == "cpu family" && family == "0":
-				family = value
-			case key == "model" && model == "0":
-				model = value
+			key, value, _ := strings.Cut(line, ":")
+			if key = strings.TrimSpace(key); fields[key] == "unknown" || fields[key] == "0" {
+				fields[key] = strings.TrimSpace(value)
 			}
 		}
 	}
-	vectorscanBits, _ := expectedVectorscanBits()
-	return fmt.Sprintf("vendor=%s family=%s model=%s avx512f=%d avx512bw=%d avx512vbmi=%d "+
-		"casei_vector_bits=%d vectorscan_vector_bits=%d stringzilla_vector_bits=%d veloz_vector_bits=%d",
-		vendor, family, model,
-		int(boolMetric(cpu.X86.HasAVX512F)), int(boolMetric(cpu.X86.HasAVX512BW)), int(boolMetric(cpu.X86.HasAVX512VBMI)),
-		casei.RuntimeVectorBits(), vectorscanBits, stringzilla.VectorBits(), velozVectorBits())
+	return fmt.Sprintf("vendor=%s family=%s model=%s avx512f=%d avx512bw=%d avx512vbmi=%d",
+		fields["vendor_id"], fields["cpu family"], fields["model"],
+		int(boolMetric(cpu.X86.HasAVX512F)), int(boolMetric(cpu.X86.HasAVX512BW)), int(boolMetric(cpu.X86.HasAVX512VBMI)))
 }
 
-// TestBoardEntrantsAgree builds the small cells of the pinned board and holds
-// casei and every supporting entrant to the oracle, as BenchmarkBoard does
-// before it times a cell. It keeps the board's wiring under CI's arena job,
-// which builds the native field but does not run benchmarks.
+// TestBoardEntrantsAgree holds casei and every supporting entrant to the
+// oracle on the pinned board's cells up to 256 KiB, as BenchmarkBoard does
+// before it times a cell. It keeps the wiring under CI's arena job.
 func TestBoardEntrantsAgree(t *testing.T) {
 	for _, spec := range board.Cells(board.Seed) {
 		if spec.Sensitive || spec.Size > 256<<10 {
@@ -502,68 +440,27 @@ func TestBoardEntrantsAgree(t *testing.T) {
 			t.Fatalf("cell %s: %v", spec.Name(), err)
 		}
 		for _, w := range c.wrong {
-			t.Errorf("cell %s: %v", spec.Name(), w)
+			t.Errorf("cell %s: %s %s", spec.Name(), w.name, w.detail)
 		}
 	}
 }
 
-// TestBoardHazardMatesAgree holds every pinned entrant that speaks UTF-8 to
-// board.HazardMates: each fold mate the board may plant must be found by every
-// entrant, from every rune a pattern can hold. A mate an entrant does not fold
-// belongs in the semantic tests, not in timing cells.
+// TestBoardHazardMatesAgree holds every entrant that searches UTF-8 to
+// board.HazardMates: each fold mate the board may plant, of every rune that
+// has one, is found by every entrant.
 func TestBoardHazardMatesAgree(t *testing.T) {
-	type literal func(pattern string) (func(haystack string) int, error)
-	entrants := map[string]literal{
-		"regexp": func(p string) (func(string) int, error) {
-			re := regexpAltFor([]string{p})
-			return func(h string) int {
-				if loc := re.FindStringIndex(h); loc != nil {
-					return loc[0]
-				}
-				return -1
-			}, nil
-		},
-		"pcre2": func(p string) (func(string) int, error) {
-			re, err := pcre2jit.CompileLiteral(p)
-			if err != nil {
-				return nil, err
-			}
-			return re.Index, nil
-		},
-		"rure": func(p string) (func(string) int, error) {
-			re, err := rure.CompileLiteral(p)
-			if err != nil {
-				return nil, err
-			}
-			return re.Index, nil
-		},
-	}
-	if bits, _ := expectedVectorscanBits(); bits > 0 {
-		entrants["vectorscan"] = func(p string) (func(string) int, error) {
-			m, err := vectorscan.CompileLiteral(p)
-			if err != nil {
-				return nil, err
-			}
-			return m.Index, nil
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		mates := board.HazardMates(r)
+		if len(mates) == 1 || !slices.Contains(board.HazardMates(board.FoldKey(r)), r) {
+			continue // nothing to plant, or r is itself never planted
 		}
-	}
-	if stringZillaAvailable {
-		entrants["stringzilla"] = func(p string) (func(string) int, error) {
-			m, err := stringzilla.CompileLiteral(p)
-			if err != nil {
-				return nil, err
-			}
-			return m.Index, nil
-		}
-	}
-	for _, r := range board.PatternRunes() {
-		for name, compile := range entrants {
-			index, err := compile(string(r))
+		for _, name := range boardEntrants {
+			e, supported, err := boardEntrant(name, []string{string(r)}, false)
 			if err != nil {
 				t.Fatalf("%s %q: %v", name, r, err)
 			}
-			for _, mate := range board.HazardMates(r) {
-				if got := index("\n" + string(mate) + "\n"); got != 1 { // newline is never a pattern rune
+			for _, mate := range mates {
+				if supported && e.find("\n"+string(mate)+"\n").Start != 1 {
 					t.Errorf("%s does not fold %q (%U) with %q (%U)", name, r, r, mate, mate)
 				}
 			}

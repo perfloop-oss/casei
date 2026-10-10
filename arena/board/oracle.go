@@ -46,8 +46,8 @@ type Hit struct {
 
 // Matches is the board's answer key. It returns the non-overlapping matches of
 // Matcher.Each: leftmost start first, ties to the lowest pattern index, the
-// next search starting where the last match ended. limit caps the number of
-// hits; Find and IndexFold use 1.
+// next search starting where the last match ended. Find and IndexFold answer
+// with its first hit.
 //
 // It is structurally unlike the candidate: it folds the whole haystack once,
 // then runs an exact substring search per pattern and keeps each pattern's next
@@ -55,7 +55,7 @@ type Hit struct {
 // pattern starts with a lead byte that no continuation byte can equal. The
 // haystack and patterns must be valid UTF-8 and the patterns non-empty; the
 // generator draws only such cells.
-func Matches(haystack string, patterns []string, sensitive bool, limit int) []Hit {
+func Matches(haystack string, patterns []string, sensitive bool) []Hit {
 	if !utf8.ValidString(haystack) {
 		panic("board oracle needs valid UTF-8")
 	}
@@ -88,7 +88,7 @@ func Matches(haystack string, patterns []string, sensitive bool, limit int) []Hi
 		next[i] = index(k, 0)
 	}
 	var hits []Hit
-	for at := 0; limit < 0 || len(hits) < limit; {
+	for at := 0; ; {
 		best := -1
 		for i, k := range keys {
 			if next[i] >= 0 && next[i] < at {
