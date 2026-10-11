@@ -64,6 +64,13 @@ class VerifyBoardTest(unittest.TestCase):
         name = family("op")[0]
         self.assertFails(transcript(**{name: {"ratio": 0.6, "faster": "pcre2"}}), f"{name}: x_vs_best=1.2000")
 
+    # A corrupt ratio fails even when another entrant sets a valid x_vs_best.
+    def test_rejects_corrupt_entrant_ratio(self):
+        name = family("op")[0]
+        for bad in ("-0.5", "nan", "inf"):
+            text = transcript().replace(line(name), line(name).replace("0.5 vectorscan_x", f"{bad} vectorscan_x"))
+            self.assertFails(text, f"{name}: vectorscan_x={bad} is not a positive finite ratio")
+
     def test_rejects_cell_above_limit(self):
         self.assertFails(transcript(**{family("size")[0]: {"ratio": 1.11}}), "is outside (0, 1.1]")
 
