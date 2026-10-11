@@ -123,7 +123,7 @@ func TestASCIIPairShortSkip64TailPosition(t *testing.T) {
 		t.Skip("AVX-512 BW pair path is disabled")
 	}
 
-	plan := newSearchPlan([]string{"fatal panic"})
+	plan := newSearchPlan([]string{"fatal panic"}, false)
 	probe := &plan.asciiPair
 	if !probe.usable() {
 		t.Fatal("fixed long ASCII literal did not compile an aligned pair probe")

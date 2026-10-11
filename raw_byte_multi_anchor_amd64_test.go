@@ -71,7 +71,7 @@ func TestRawByteMultiAnchorDenseEpochMatchesTableModel(t *testing.T) {
 	if !cpu.X86.HasAVX512F || !cpu.X86.HasAVX512BW || !cpu.X86.HasAVX512VBMI {
 		t.Skip("AVX-512 VBMI multi-anchor path is disabled")
 	}
-	plan := newSearchPlan(rawByteCyrillicPatterns)
+	plan := newSearchPlan(rawByteCyrillicPatterns, false)
 	filter := &plan.rawByteMulti
 	if !filter.usable() {
 		t.Fatal("eligible plan did not compile a raw multi-anchor filter")
@@ -142,7 +142,7 @@ func TestRawByteMultiAnchorVBMISkip64MatchesTableModel(t *testing.T) {
 	if !cpu.X86.HasAVX512F || !cpu.X86.HasAVX512BW || !cpu.X86.HasAVX512VBMI {
 		t.Skip("AVX-512 VBMI multi-anchor path is disabled")
 	}
-	plan := newSearchPlan(rawByteCyrillicPatterns)
+	plan := newSearchPlan(rawByteCyrillicPatterns, false)
 	filter := &plan.rawByteMulti
 	if !filter.usable() {
 		t.Fatal("eligible plan did not compile a raw multi-anchor filter")

@@ -79,7 +79,7 @@ func makeRootASCIIWordCerts(p *searchPlan, patterns []string) (rootASCIIWordCert
 			r, size := utf8.DecodeRuneInString(pattern[at:])
 			var token uint32
 			if r == utf8.RuneError && size == 1 {
-				token = p.opaque[pattern[at]]
+				token = p.byteTokens[pattern[at]]
 			} else {
 				token = p.runes[r]
 			}

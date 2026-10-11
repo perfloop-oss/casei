@@ -127,8 +127,9 @@ func rngFor(key string, stream uint64) *rand.Rand {
 // draw fixes the family's property at its level and draws every other one,
 // redrawing until the cell is coherent: IndexFold searches for one pattern,
 // and a one-byte pattern cannot hold a non-ASCII rune. Case-sensitive cells
-// appear only in the case family: casei has no case-sensitive API yet, and
-// drawing case mode everywhere would fail every family on that one gap.
+// appear only in the case family: casei exposes NewExactMatcher, but the board
+// does not wire it yet; drawing case mode everywhere would fail every family
+// on that one gap.
 func draw(familyName string, l level, index int) Spec {
 	s := Spec{Family: familyName, Level: l.label, Index: index}
 	rng := rngFor(s.key(), 0)

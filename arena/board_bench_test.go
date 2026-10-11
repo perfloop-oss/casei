@@ -49,8 +49,7 @@ func BenchmarkBoard(b *testing.B) {
 				}
 			}()
 			if spec.Sensitive {
-				// casei has no case-sensitive API: the cell reports it
-				// unsupported, which fails the board until casei answers it.
+				// casei exposes NewExactMatcher, but BenchmarkBoard does not wire it yet.
 				for b.Loop() {
 				}
 				return

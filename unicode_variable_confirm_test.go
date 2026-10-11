@@ -17,7 +17,7 @@ func variableConfirmRenderings(forms [][]string, at int, prefix string, out *[]s
 
 func TestUnicodePairVariableConfirm(t *testing.T) {
 	const needle = "Шерлок Холмс"
-	plan := newSearchPlan([]string{needle})
+	plan := newSearchPlan([]string{needle}, false)
 	confirm := plan.unicodePairConfirm()
 	if plan.unicodePairs[0].pairPair.valid == 0 || !confirm.valid() || !confirm.variable() {
 		t.Fatalf("variable confirmation was not compiled: pair=%+v confirm=%x", plan.unicodePairs[0].pairPair, string(confirm))
@@ -108,7 +108,7 @@ func TestUnicodePairVariableConfirm(t *testing.T) {
 
 func TestUnicodePairVariableConfirmRejectsMalformedPattern(t *testing.T) {
 	const needle = "Шер\x80лок Холмс"
-	plan := newSearchPlan([]string{needle})
+	plan := newSearchPlan([]string{needle}, false)
 	if plan.unicodePairs[0].pairPair.valid == 0 {
 		t.Fatal("fixture did not compile a pair-pair screen")
 	}

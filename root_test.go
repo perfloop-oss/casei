@@ -62,7 +62,7 @@ func TestFindASCIIRunBytes(t *testing.T) {
 
 func TestTripleFilterKeepsOtherRoots(t *testing.T) {
 	patterns := []string{"~", "aZm]"}
-	plan := newSearchPlan(patterns)
+	plan := newSearchPlan(patterns, false)
 	if plan.triples.usable() || !plan.filter.usable() {
 		t.Fatalf("partial triples were not retained by the complete filter: triples=%+v filter=%+v", plan.triples, plan.filter)
 	}
@@ -72,7 +72,7 @@ func TestTripleFilterKeepsOtherRoots(t *testing.T) {
 }
 
 func TestTripleFilterSkip(t *testing.T) {
-	plan := newSearchPlan([]string{"fatal panic", "segfault detected"})
+	plan := newSearchPlan([]string{"fatal panic", "segfault detected"}, false)
 	if !plan.triples.usable() {
 		t.Fatalf("no triples: filter=%+v", plan.filter)
 	}
@@ -90,7 +90,7 @@ func TestTripleFilterSkip(t *testing.T) {
 
 func TestTripleMixedFilter(t *testing.T) {
 	patterns := []string{"fatal panic", "segfault detected"}
-	plan := newSearchPlan(patterns)
+	plan := newSearchPlan(patterns, false)
 	if plan.triples.n != 3 || plan.triples.values[0].fold != 7 || plan.triples.values[1].fold != 7 ||
 		plan.triples.values[2].fold != 4 || plan.triples.values[2].first < 0x80 {
 		t.Fatalf("mixed triple plan = %+v", plan.triples)
@@ -118,7 +118,7 @@ func TestTripleMixedFilter(t *testing.T) {
 }
 
 func TestOpaqueRootFilter(t *testing.T) {
-	plan := newSearchPlan([]string{"\xe2"})
+	plan := newSearchPlan([]string{"\xe2"}, false)
 	if !plan.filter.usable() {
 		t.Fatalf("opaque root did not get a filter: %+v", plan.filter)
 	}
@@ -202,7 +202,7 @@ func TestSpecializedTripleSkips(t *testing.T) {
 }
 
 func TestASCIIPairSkip(t *testing.T) {
-	plan := newSearchPlan([]string{"fatal panic"})
+	plan := newSearchPlan([]string{"fatal panic"}, false)
 	probe := &plan.asciiPair
 	if !probe.usable() {
 		t.Fatal("fixed long ASCII literal did not compile an aligned pair probe")
@@ -253,7 +253,7 @@ func TestASCIIPairSkip(t *testing.T) {
 }
 
 func TestASCIIVBMIProjections(t *testing.T) {
-	plan := newSearchPlan([]string{"goto retryLabel"})
+	plan := newSearchPlan([]string{"goto retryLabel"}, false)
 	probe := &plan.asciiProbe
 	if probe.vbmi.valid == 0 {
 		t.Fatalf("letter-only probe did not compile a VBMI projection: %+v", probe)
@@ -271,11 +271,11 @@ func TestASCIIVBMIProjections(t *testing.T) {
 
 	// The direct compare route has lower survivor latency for non-letter
 	// anchors, including this dense-whitespace spelling.
-	if blocked := newSearchPlan([]string{"The "}); blocked.asciiProbe.vbmi.valid != 0 {
+	if blocked := newSearchPlan([]string{"The "}, false); blocked.asciiProbe.vbmi.valid != 0 {
 		t.Fatalf("whitespace probe unexpectedly compiled a VBMI projection: %+v", blocked.asciiProbe.vbmi)
 	}
 
-	pairPlan := newSearchPlan([]string{"fatal panic"})
+	pairPlan := newSearchPlan([]string{"fatal panic"}, false)
 	pair := &pairPlan.asciiPair
 	if pair.vbmi.valid == 0 || pair.vbmi.first[pair.first&0x3f] == 0 || pair.vbmi.second[pair.second&0x3f] == 0 {
 		t.Fatalf("letter pair did not compile VBMI tables: %+v", pair.vbmi)
@@ -284,21 +284,21 @@ func TestASCIIVBMIProjections(t *testing.T) {
 		t.Fatalf("rare leading pair moved VBMI anchor from %d to %d", pair.secondAt, pair.vbmi.secondAt)
 	}
 
-	displaced := newSearchPlan([]string{"goto retryLabel"}).asciiPair
+	displaced := newSearchPlan([]string{"goto retryLabel"}, false).asciiPair
 	if displaced.secondAt != 8 || displaced.vbmi.valid == 0 || displaced.vbmi.secondAt != 9 {
 		t.Fatalf("VBMI displacement = %+v", displaced)
 	}
 	if displaced.vbmi.second['y'&0x3f] == 0 || displaced.vbmi.second['Y'&0x3f] == 0 {
 		t.Fatalf("displaced VBMI table lost y/Y: %+v", displaced.vbmi.second)
 	}
-	if punctuated := newSearchPlan([]string{"!abcdefg?"}); punctuated.asciiPair.vbmi.valid != 0 {
+	if punctuated := newSearchPlan([]string{"!abcdefg?"}, false); punctuated.asciiPair.vbmi.valid != 0 {
 		t.Fatalf("punctuated pair unexpectedly compiled a VBMI projection: %+v", punctuated.asciiPair.vbmi)
 	}
 }
 
 func TestASCIIVBMIProbeBoundaries(t *testing.T) {
 	needle := "goto retryLabel"
-	plan := newSearchPlan([]string{needle})
+	plan := newSearchPlan([]string{needle}, false)
 	probe := &plan.asciiProbe
 	for alignment := 0; alignment < 128; alignment++ {
 		haystack := strings.Repeat("x", alignment) + "GoTo ReTrYlAbEl" + strings.Repeat("x", 193)
@@ -337,7 +337,7 @@ func TestASCIIVBMIProbeBoundaries(t *testing.T) {
 
 func TestASCIIPairVBMIDisplacement(t *testing.T) {
 	needle := "goto retryLabel"
-	plan := newSearchPlan([]string{needle})
+	plan := newSearchPlan([]string{needle}, false)
 	if !plan.asciiPairVBMIDisplaced() {
 		t.Fatalf("plan did not compile a displaced VBMI pair: %+v", plan.asciiPair.vbmi)
 	}
@@ -374,7 +374,7 @@ func TestASCIIPairVBMIDisplacement(t *testing.T) {
 
 func TestASCIIOnlyStructuredProbe(t *testing.T) {
 	needle := "[keys[i%"
-	plan := newSearchPlan([]string{needle})
+	plan := newSearchPlan([]string{needle}, false)
 	if !plan.asciiOnly || !plan.asciiOnlyLong ||
 		plan.asciiOnlyProbe.secondAt != plan.asciiOnlyProbe.thirdAt {
 		t.Fatalf("structured ASCII probe = %+v long=%t", plan.asciiOnlyProbe, plan.asciiOnlyLong)
@@ -407,7 +407,7 @@ func TestASCIIOnlyStructuredProbe(t *testing.T) {
 }
 
 func TestPairShuftiSkip(t *testing.T) {
-	plan := newSearchPlan([]string{"Kелвин0", "ſекрет1", "Σигма2", "ςигма3", "щупальце4"})
+	plan := newSearchPlan([]string{"Kелвин0", "ſекрет1", "Σигма2", "ςигма3", "щупальце4"}, false)
 	filter := &plan.filter
 	if !filter.shufti.usable() {
 		t.Fatalf("hazard roots did not compile the two-group pair filter: %+v", filter)
@@ -464,7 +464,7 @@ func TestPairShuftiSkip(t *testing.T) {
 
 func TestPairShuftiWithOneRoots(t *testing.T) {
 	patterns := []string{"щупальце", "kelvin", "zygomorphic", "ſecret", "Zq9xW", "grofse", "ΤΈΛΟΣ", "watchdog"}
-	plan := newSearchPlan(patterns)
+	plan := newSearchPlan(patterns, false)
 	filter := &plan.filter
 	if filter.shufti.oneN != 2 || !filter.shufti.usable() {
 		t.Fatalf("mixed shufti filter = %+v", filter.shufti)
@@ -516,7 +516,7 @@ func tripleGenericAt(first, second, third byte, filter *tripleFilter) bool {
 }
 
 func TestTripleShuftiSkip(t *testing.T) {
-	plan := newSearchPlan([]string{"a@b", "c\\d", "e`f", "g|h", "i!j", "l?m", "щупальце"})
+	plan := newSearchPlan([]string{"a@b", "c\\d", "e`f", "g|h", "i!j", "l?m", "щупальце"}, false)
 	filter := &plan.asciiTriples
 	if !plan.asciiTriplesComplete || !filter.shufti.usable() {
 		t.Fatalf("mixed triple table was not compiled: complete=%t filter=%+v", plan.asciiTriplesComplete, filter)
@@ -609,7 +609,7 @@ func TestTripleShuftiSkip(t *testing.T) {
 }
 
 func TestCompleteTripleShufti(t *testing.T) {
-	plan := newSearchPlan([]string{"kelvin", "zygomorphic", "ſecret", "Zq9xW", "grofse", "watchdog"})
+	plan := newSearchPlan([]string{"kelvin", "zygomorphic", "ſecret", "Zq9xW", "grofse", "watchdog"}, false)
 	filter := &plan.triples
 	if !plan.triplesComplete || !filter.shufti.usable() {
 		t.Fatalf("complete triple table was not compiled: complete=%t filter=%+v", plan.triplesComplete, filter)
@@ -647,7 +647,7 @@ func TestCompleteTripleShufti(t *testing.T) {
 }
 
 func TestPairShuftiTrailingOne(t *testing.T) {
-	plan := newSearchPlan([]string{"Ab", "Cd", "Ef", "Gh", "Ij", "Kl", "Mn", "Op", "Qr", "x"})
+	plan := newSearchPlan([]string{"Ab", "Cd", "Ef", "Gh", "Ij", "Kl", "Mn", "Op", "Qr", "x"}, false)
 	if !plan.filter.shufti.usable() || plan.filter.shufti.oneN == 0 {
 		t.Fatalf("mixed filter did not compile Shufti one roots: %+v", plan.filter)
 	}
@@ -663,7 +663,7 @@ func TestPairShuftiTrailingOne(t *testing.T) {
 
 func TestASCIIPairAnchorSkip(t *testing.T) {
 	patterns := []string{"щупальце", "kelvin", "zygomorphic", "ſecret", "Zq9xW", "grofse", "ΤΈΛΟΣ", "watchdog"}
-	plan := newSearchPlan(patterns)
+	plan := newSearchPlan(patterns, false)
 	anchors := &plan.asciiPairAnchors
 	if !anchors.usable() {
 		t.Fatalf("mixed plan did not compile the all-ASCII pair anchors: %+v", anchors)
@@ -806,7 +806,7 @@ func TestPairPairWordSkip(t *testing.T) {
 }
 
 func TestPairPairVBMIProjection(t *testing.T) {
-	plan := newSearchPlan([]string{"яр"})
+	plan := newSearchPlan([]string{"яр"}, false)
 	if plan.unicodePairN < 2 {
 		t.Fatalf("no Unicode pair anchors: %+v", plan.unicodePairs)
 	}
@@ -859,7 +859,7 @@ func TestUnicodePairConfirm(t *testing.T) {
 	}
 
 	const needle = "приключения лилий"
-	plan := newSearchPlan([]string{needle})
+	plan := newSearchPlan([]string{needle}, false)
 	confirm := plan.unicodePairConfirm()
 	if plan.unicodePairN == 0 || plan.unicodePairs[0].pairPair.valid == 0 || !confirm.valid() {
 		t.Fatalf("no bounded Unicode confirmation: anchors=%+v confirm=%+v", plan.unicodePairs, confirm)
@@ -873,7 +873,7 @@ func TestUnicodePairConfirm(t *testing.T) {
 	if got := confirm.skippedN(); got != unicodePairConfirmSkippedParts {
 		t.Fatalf("pair-pair-confirmed parts = %d, want %d", got, unicodePairConfirmSkippedParts)
 	}
-	asciiPlan := newSearchPlan([]string{"ascii literal"})
+	asciiPlan := newSearchPlan([]string{"ascii literal"}, false)
 	if !asciiPlan.asciiOnly || asciiPlan.singlePayload != "ascii literal" || asciiPlan.unicodePairConfirm().valid() {
 		t.Fatalf("all-ASCII payload was not kept separate: asciiOnly=%t payload=%q confirm=%+v",
 			asciiPlan.asciiOnly, asciiPlan.singlePayload, asciiPlan.unicodePairConfirm())
@@ -927,7 +927,7 @@ func TestUnicodePairConfirm(t *testing.T) {
 	// The byte-pair anchor need not be the first token. Its coordinate is
 	// translated back to the literal start inside the vector kernel.
 	prefixedNeedle := "x" + needle
-	prefixedPlan := newSearchPlan([]string{prefixedNeedle})
+	prefixedPlan := newSearchPlan([]string{prefixedNeedle}, false)
 	prefixedConfirm := prefixedPlan.unicodePairConfirm()
 	if !prefixedConfirm.valid() || prefixedConfirm.anchorAt() != prefixedPlan.unicodePairs[0].at ||
 		prefixedPlan.unicodePairs[0].pairPair.valid == 0 || prefixedPlan.unicodePairs[0].at == 0 {
@@ -941,7 +941,7 @@ func TestUnicodePairConfirm(t *testing.T) {
 	if got := makeUnicodePairConfirm("Σя", 0); !got.valid() || got[8] != 3 {
 		t.Fatalf("three-way width-stable confirmation = %+v, want three forms", got)
 	}
-	threePlan := newSearchPlan([]string{"яраΣ"})
+	threePlan := newSearchPlan([]string{"яраΣ"}, false)
 	threeConfirm := threePlan.unicodePairConfirm()
 	hasThreeWay := func(confirm unicodePairConfirm) bool {
 		for part := range int(confirm[unicodePairConfirmNAt]) {
@@ -976,7 +976,7 @@ func TestUnicodePairConfirm(t *testing.T) {
 		if got := makeUnicodePairConfirm(tc.pattern, 0); got.valid() {
 			t.Fatalf("unsupported confirmation shape %q compiled as %+v", tc.pattern, got)
 		}
-		fallback := newSearchPlan([]string{tc.pattern})
+		fallback := newSearchPlan([]string{tc.pattern}, false)
 		if confirm := fallback.unicodePairConfirm(); confirm.valid() {
 			t.Fatalf("unsupported plan %q retained raw confirmation %+v", tc.pattern, confirm)
 		}
@@ -1000,7 +1000,7 @@ func TestUnicodePairConfirm(t *testing.T) {
 
 func TestStaticASCIIByteAnchor(t *testing.T) {
 	needle := strings.Repeat("a", 15) + "b"
-	plan := newSearchPlan([]string{needle})
+	plan := newSearchPlan([]string{needle}, false)
 	if !plan.asciiStaticAnchor || plan.asciiStaticAt != len(needle)-1 ||
 		plan.asciiStaticKind != rootASCIIFold || plan.asciiStaticByte != 'b' {
 		t.Fatalf("static repeated-byte anchor = at %d kind %d byte %q enabled %t", plan.asciiStaticAt, plan.asciiStaticKind, plan.asciiStaticByte, plan.asciiStaticAnchor)
@@ -1032,7 +1032,7 @@ func TestHitTripleFilter(t *testing.T) {
 	plan := newSearchPlan([]string{
 		"fatal panic", "segfault detected", "oom killed", "disk full",
 		"Payment Declined", "quota exceeded", "handshake failed", "watchdog fired",
-	})
+	}, false)
 	t.Logf("triples=%+v roots=%v fallback=%+v", plan.triples, plan.tripleRoots, plan.filter)
 }
 
@@ -1058,7 +1058,7 @@ func TestPairSkipASCII(t *testing.T) {
 }
 
 func TestASCIIShortLiteral(t *testing.T) {
-	plan := newSearchPlan([]string{"The "})
+	plan := newSearchPlan([]string{"The "}, false)
 	literal := plan.asciiProbe.short
 	if literal.valid == 0 {
 		t.Fatal("four-byte literal was not compiled")
@@ -1080,7 +1080,7 @@ func TestASCIIShortLiteral(t *testing.T) {
 		}
 	}
 
-	punctuation := newSearchPlan([]string{"A-1!"})
+	punctuation := newSearchPlan([]string{"A-1!"}, false)
 	if !punctuation.asciiAnchorMatches("a-1!", 0) || punctuation.asciiAnchorMatches("a_1!", 0) {
 		t.Fatal("short literal changed punctuation matching")
 	}
