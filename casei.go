@@ -19,9 +19,9 @@
 //	if match, ok := m.Find(line); ok { use(match.Pattern, match.Start) }
 //
 // The repository around this package is also an open benchmark arena: its
-// tests define these semantics, arena/ measures the folded search paths against
-// competing implementations built from source, and CONTEXT.md catalogs the
-// known techniques.
+// tests define these semantics, arena/ measures the folded and exact search
+// paths against competing implementations built from source, and CONTEXT.md
+// catalogs the known techniques.
 //
 // IndexFold and NewMatcher use Unicode simple case folding over UTF-8:
 //
