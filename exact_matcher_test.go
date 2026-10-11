@@ -163,7 +163,11 @@ func TestNewExactMatcherPopulationAgainstByteOracle(t *testing.T) {
 	}
 	for corpusID, corpus := range corpora {
 		for size := 1; size <= 64; size++ {
-			for _, count := range []int{size, 64} {
+			counts := []int{size}
+			if size < 64 {
+				counts = append(counts, 64)
+			}
+			for _, count := range counts {
 				patterns := make([]string, count)
 				for pattern := range patterns {
 					start := (pattern*67 + size*13) % (len(corpus) - size + 1)
