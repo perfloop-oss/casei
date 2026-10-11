@@ -364,28 +364,19 @@ func plant(rng *rand.Rand, base string, planted []int, patterns []string, s Spec
 		}
 	}
 	if s.Sensitive {
-		limit, longest := first, 0
+		limit := first
 		for _, p := range patterns {
 			if i := strings.Index(base, p); i >= 0 {
 				limit = min(limit, i)
 			}
-			longest = max(longest, len(p))
 		}
-		// exact reports whether some pattern matches left+d+right across d.
-		exact := func(left, d, right string) bool {
-			text := left + d + right
-			for _, p := range patterns {
-				for i := 0; i < len(text); i++ {
-					j := strings.Index(text[i:], p)
-					if j < 0 || i+j >= len(left)+len(d) {
-						break
-					}
-					if i += j; i+len(p) > len(left) {
-						return true
-					}
-				}
-			}
-			return false
+		// exact reports whether d inserted at at makes a match of some
+		// pattern: one that overlaps d lies within len(p)-1 bytes of it.
+		exact := func(at int, d string) bool {
+			return slices.ContainsFunc(patterns, func(p string) bool {
+				k := len(p) - 1
+				return strings.Contains(base[max(at-k, 0):at]+d+base[at:min(at+k, len(base))], p)
+			})
 		}
 		var decoys []insert
 		for _, p := range patterns {
@@ -398,7 +389,7 @@ func plant(rng *rand.Rand, base string, planted []int, patterns []string, s Spec
 				for at > 0 && at < len(base) && base[at]&0xC0 == 0x80 {
 					at--
 				}
-				if !exact(base[max(at-longest, 0):at], d, base[at:min(at+longest, len(base))]) {
+				if !exact(at, d) {
 					decoys = append(decoys, insert{at, d})
 					break
 				}
