@@ -12,7 +12,7 @@ func TestASCIIOnlyMatchWidthUsesPlanTokens(t *testing.T) {
 	for i := range literal {
 		literal[i] = byte(i)
 	}
-	plan := newSearchPlan([]string{string(literal)})
+	plan := newSearchPlan([]string{string(literal)}, false)
 	if !plan.asciiOnly || !plan.asciiVerifyTokens || len(plan.singleTokens) != len(literal) {
 		t.Fatalf("ASCII token plan = asciiOnly:%t verify:%t tokens:%d; want an all-ASCII token-verified literal", plan.asciiOnly, plan.asciiVerifyTokens, len(plan.singleTokens))
 	}
@@ -48,7 +48,7 @@ func TestASCIIOnlyMatchWidthBoundsAndUnicodeFallback(t *testing.T) {
 		t.Fatalf("complete unaligned ASCII window = (%d,%t), want (%d,true)", width, ok, len(plan.asciiNeedle))
 	}
 
-	unicodePlan := newSearchPlan([]string{"abcK"})
+	unicodePlan := newSearchPlan([]string{"abcK"}, false)
 	if !unicodePlan.asciiVerifyTokens || unicodePlan.asciiOnly {
 		t.Fatalf("Unicode token plan = verify:%t asciiOnly:%t", unicodePlan.asciiVerifyTokens, unicodePlan.asciiOnly)
 	}

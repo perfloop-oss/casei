@@ -6,21 +6,26 @@ import (
 	"unicode/utf8"
 )
 
-// searchPlan is the package-owned compiled representation used by both public
-// search entry points. It maps every fold orbit needed by the pattern set to a
-// compact token, then advances one deterministic state machine over decoded
-// haystack units. Valid UTF-8 runes and invalid bytes intentionally take
-// separate paths: an invalid byte is an opaque singleton and can never match a
-// continuation byte of a valid rune.
+// searchPlan is the package-owned compiled representation used by the public
+// search entry points. Folded plans map each simple-fold orbit to a compact
+// token and advance over decoded haystack units. Exact plans map each byte to a
+// token and advance over the raw byte stream. Both use the same trie, failure
+// links, transition routine, and match ordering; only their unit/token mapping
+// differs. In a folded plan, an invalid byte is an opaque singleton and cannot
+// match a continuation byte of a valid rune.
 //
 // The implementation is original to this package. It does not import, link,
 // or delegate lookup to an arena entrant.
 type searchPlan struct {
-	// ascii and opaque map respectively valid one-byte runes and invalid UTF-8
-	// bytes to plan tokens. Token zero means that no pattern can consume the
-	// input unit, which always returns the state machine to its root.
+	// exact selects byte-identity tokenization for NewExactMatcher. It is fixed
+	// during construction; searches never change the compiled plan.
+	exact bool
+	// ascii and byteTokens map valid one-byte runes and bytes to plan tokens.
+	// Folded plans use byteTokens for opaque malformed bytes; exact plans use it
+	// for every byte. The table is also reused by the raw-byte filter.
+	// Token zero means that no pattern can consume the input unit.
 	ascii      [utf8.RuneSelf]uint32
-	opaque     [256]uint32
+	byteTokens [256]uint32
 	rootByte   [256]uint8
 	rootKind   uint8
 	rootNeedle byte
@@ -887,7 +892,7 @@ func cachedSinglePlan(needle string) *searchPlan {
 		return entry.plan
 	}
 
-	entry := &singlePlanCacheEntry{needle: needle, plan: newSearchPlan([]string{needle})}
+	entry := &singlePlanCacheEntry{needle: needle, plan: newSearchPlan([]string{needle}, false)}
 	slot.Store(entry)
 	recentSinglePlan.Store(entry)
 	return entry.plan
@@ -905,8 +910,11 @@ func singlePlanCacheIndex(needle string) int {
 	return int(h & (singlePlanCacheSlots - 1))
 }
 
-func newSearchPlan(patterns []string) *searchPlan {
+// newSearchPlan compiles patterns as simple-fold rune units or byte-identity
+// units according to exact.
+func newSearchPlan(patterns []string, exact bool) *searchPlan {
 	p := &searchPlan{
+		exact:        exact,
 		patternCount: len(patterns),
 		runes:        make(map[rune]uint32),
 		empty:        -1,
@@ -925,10 +933,12 @@ func newSearchPlan(patterns []string) *searchPlan {
 		state, units, maxBytes := 0, 0, 0
 		for at := 0; at < len(pattern); {
 			token, size := p.patternToken(pattern, at, &nextToken)
-			r, _ := utf8.DecodeRuneInString(pattern[at:])
 			unitBytes := size
-			if r != utf8.RuneError || size != 1 {
-				unitBytes = maxFoldRuneWidth(r)
+			if !p.exact {
+				r, _ := utf8.DecodeRuneInString(pattern[at:])
+				if r != utf8.RuneError || size != 1 {
+					unitBytes = maxFoldRuneWidth(r)
+				}
 			}
 			maxBytes += unitBytes
 			next, ok := p.nodes[state].edges[token]
@@ -961,16 +971,18 @@ func newSearchPlan(patterns []string) *searchPlan {
 	}
 
 	p.finish(nextToken)
-	if len(patterns) > 1 {
-		p.makeASCIIPairAnchors(patterns)
-	}
-	if len(patterns) == 1 {
-		p.makeASCIIAnchor(patterns[0])
-		p.makeUnicodeAnchor(patterns[0])
-	}
-	p.makeRawByteTokenPlan(patterns)
-	if p.patternCount > 1 && p.triplesComplete && !p.rawByteMulti.usable() {
-		p.makeTripleBucketFilter(patterns)
+	if !p.exact {
+		if len(patterns) > 1 {
+			p.makeASCIIPairAnchors(patterns)
+		}
+		if len(patterns) == 1 {
+			p.makeASCIIAnchor(patterns[0])
+			p.makeUnicodeAnchor(patterns[0])
+		}
+		p.makeRawByteTokenPlan(patterns)
+		if p.patternCount > 1 && p.triplesComplete && !p.rawByteMulti.usable() {
+			p.makeTripleBucketFilter(patterns)
+		}
 	}
 	return p
 }
@@ -990,17 +1002,28 @@ func maxFoldRuneWidth(r rune) int {
 }
 
 // patternToken emits one token for a pattern unit and advances at by its
-// source width. A malformed pattern byte is an opaque unit, just as it is in a
-// haystack scan.
+// source width. Exact plans emit byte-identity tokens; folded plans treat a
+// malformed pattern byte as an opaque unit, just as they do in a haystack scan.
 func (p *searchPlan) patternToken(s string, at int, nextToken *uint32) (uint32, int) {
+	if p.exact {
+		value := s[at]
+		token := p.byteTokens[value]
+		if token == 0 {
+			token = *nextToken
+			*nextToken = *nextToken + 1
+			p.byteTokens[value] = token
+		}
+		return token, 1
+	}
+
 	r, size := utf8.DecodeRuneInString(s[at:])
 	if r == utf8.RuneError && size == 1 {
 		byteValue := s[at]
-		token := p.opaque[byteValue]
+		token := p.byteTokens[byteValue]
 		if token == 0 {
 			token = *nextToken
 			*nextToken++
-			p.opaque[byteValue] = token
+			p.byteTokens[byteValue] = token
 		}
 		return token, size
 	}
@@ -1604,20 +1627,72 @@ func (p *searchPlan) makeUnicodeAnchor(pattern string) {
 
 // finish computes failure links, propagates the leftmost-relevant terminal
 // through them, and optionally materializes complete transitions for the
-// compact token alphabet.
+// compact token alphabet. Fold-only byte filters are omitted for exact plans.
 func (p *searchPlan) finish(nextToken uint32) {
+	p.stride = int(nextToken)
+	if !p.exact {
+		p.finishFoldFilters()
+	}
+
+	queue := make([]int, 0, len(p.nodes))
+	for _, child := range p.nodes[0].edges {
+		queue = append(queue, child)
+	}
+	for head := 0; head < len(queue); head++ {
+		state := queue[head]
+		for token, child := range p.nodes[state].edges {
+			failure := p.nodes[state].failure
+			for failure != 0 {
+				if next, ok := p.nodes[failure].edges[token]; ok {
+					failure = next
+					goto linked
+				}
+				failure = p.nodes[failure].failure
+			}
+			if next, ok := p.nodes[0].edges[token]; ok && next != child {
+				failure = next
+			}
+		linked:
+			p.nodes[child].failure = failure
+			if preferOutput(p.nodes[failure].output, p.nodes[child].output) {
+				p.nodes[child].output = p.nodes[failure].output
+			}
+			queue = append(queue, child)
+		}
+	}
+
+	if p.stride <= 1 || len(p.nodes) > maxDensePlanTransitions/p.stride {
+		return
+	}
+	p.dense = make([]uint32, len(p.nodes)*p.stride)
+	root := p.dense[:p.stride]
+	for token, child := range p.nodes[0].edges {
+		root[token] = uint32(child)
+	}
+	for _, state := range queue {
+		row := p.dense[state*p.stride : (state+1)*p.stride]
+		failure := p.nodes[state].failure
+		copy(row, p.dense[failure*p.stride:(failure+1)*p.stride])
+		for token, child := range p.nodes[state].edges {
+			row[token] = uint32(child)
+		}
+	}
+}
+
+// finishFoldFilters builds the UTF-8 and opaque-byte screening data used only
+// by simple-fold plans.
+func (p *searchPlan) finishFoldFilters() {
 	for r, token := range p.runes {
 		if r >= 0 && r < utf8.RuneSelf {
 			p.ascii[byte(r)] = token
 		}
 	}
-	p.stride = int(nextToken)
 	// A root transition on a byte outside this set is a no-op. Mark non-ASCII
 	// bytes as stop markers too, so the ASCII block path hands their first byte
 	// to the UTF-8 decoder rather than stepping over it.
 	for byteValue := utf8.RuneSelf; byteValue < len(p.rootByte); byteValue++ {
 		p.rootByte[byteValue] = 1
-		if byteValue < 0xc0 && p.opaque[byteValue] != 0 {
+		if byteValue < 0xc0 && p.byteTokens[byteValue] != 0 {
 			// A raw byte prefilter cannot distinguish this opaque continuation
 			// from the interior of a valid UTF-8 rune. Keep such plans on the
 			// decoded transition below.
@@ -1676,50 +1751,6 @@ func (p *searchPlan) finish(nextToken uint32) {
 	}
 	p.pairSecond = makePairSecond(&p.filter)
 	p.filter.shufti = makePairShuftiFilter(p.filter)
-
-	queue := make([]int, 0, len(p.nodes))
-	for _, child := range p.nodes[0].edges {
-		queue = append(queue, child)
-	}
-	for head := 0; head < len(queue); head++ {
-		state := queue[head]
-		for token, child := range p.nodes[state].edges {
-			failure := p.nodes[state].failure
-			for failure != 0 {
-				if next, ok := p.nodes[failure].edges[token]; ok {
-					failure = next
-					goto linked
-				}
-				failure = p.nodes[failure].failure
-			}
-			if next, ok := p.nodes[0].edges[token]; ok && next != child {
-				failure = next
-			}
-		linked:
-			p.nodes[child].failure = failure
-			if preferOutput(p.nodes[failure].output, p.nodes[child].output) {
-				p.nodes[child].output = p.nodes[failure].output
-			}
-			queue = append(queue, child)
-		}
-	}
-
-	if p.stride <= 1 || len(p.nodes) > maxDensePlanTransitions/p.stride {
-		return
-	}
-	p.dense = make([]uint32, len(p.nodes)*p.stride)
-	root := p.dense[:p.stride]
-	for token, child := range p.nodes[0].edges {
-		root[token] = uint32(child)
-	}
-	for _, state := range queue {
-		row := p.dense[state*p.stride : (state+1)*p.stride]
-		failure := p.nodes[state].failure
-		copy(row, p.dense[failure*p.stride:(failure+1)*p.stride])
-		for token, child := range p.nodes[state].edges {
-			row[token] = uint32(child)
-		}
-	}
 }
 
 // asciiTripleRootsComplete reports whether triples cover every root which an
@@ -1756,7 +1787,7 @@ func (p *searchPlan) makeTripleFilter() (tripleFilter, []byte, bool) {
 		size := utf8.EncodeRune(encoded[:], r)
 		rawForms[token] = append(rawForms[token], string(encoded[:size]))
 	}
-	for value, token := range p.opaque {
+	for value, token := range p.byteTokens {
 		if token != 0 {
 			rawForms[token] = append(rawForms[token], string([]byte{byte(value)}))
 		}
@@ -1791,7 +1822,7 @@ func (p *searchPlan) makeTripleFilter() (tripleFilter, []byte, bool) {
 		return token != 0 && ok
 	}
 	unsafeRoot := make([]bool, p.stride)
-	for value, token := range p.opaque {
+	for value, token := range p.byteTokens {
 		if isRoot(token) && 0x80 <= value && value < 0xc0 {
 			unsafeRoot[token] = true
 		}
@@ -1871,7 +1902,7 @@ func (p *searchPlan) makeRootFilter(excludeRoots []byte) rootFilter {
 		size := utf8.EncodeRune(encoded[:], r)
 		forms[token] = append(forms[token], string(encoded[:size]))
 	}
-	for value, token := range p.opaque {
+	for value, token := range p.byteTokens {
 		if token != 0 {
 			forms[token] = append(forms[token], string([]byte{byte(value)}))
 		}
@@ -1884,7 +1915,7 @@ func (p *searchPlan) makeRootFilter(excludeRoots []byte) rootFilter {
 	// A continuation byte can occur inside a valid UTF-8 rune. The byte
 	// prefilter cannot distinguish that position from an opaque byte, so retain
 	// the regular decoder for plans that need one at their root.
-	for value, token := range p.opaque {
+	for value, token := range p.byteTokens {
 		if isRoot(token) && 0x80 <= value && value < 0xc0 {
 			return rootFilter{}
 		}
@@ -2018,7 +2049,7 @@ func (p *searchPlan) haystackToken(s string, at int) (uint32, int) {
 		if p.hasRawByteTokenPlan() {
 			return 0, 1
 		}
-		return p.opaque[byteValue], 1
+		return p.byteTokens[byteValue], 1
 	}
 	return p.runes[r], size
 }
@@ -2455,15 +2486,18 @@ func (p *searchPlan) find(haystack string) (Match, bool) {
 	return match, ok
 }
 
-// findWithWidth is the package's one search decision tree. Most routes return
-// zero width; an exact raw confirmation returns the source width it has already
-// proved so Matcher.Each does not decode the same match again.
+// findWithWidth is the package's shared search entry point. Folded routes may
+// return a width already proved by raw confirmation; exact plans scan byte
+// tokens through the same compiled automaton.
 func (p *searchPlan) findWithWidth(haystack string) (Match, int, bool) {
 	if p.maxUnits == 0 {
 		if p.empty >= 0 {
 			return Match{Pattern: p.empty}, 0, true
 		}
 		return Match{}, 0, false
+	}
+	if p.exact {
+		return withZeroWidth(p.findExactBytes(haystack))
 	}
 	if p.opaqueContinuation {
 		return withZeroWidth(p.findUnfiltered(haystack))
@@ -2551,6 +2585,36 @@ func (p *searchPlan) findWithWidth(haystack string) (Match, int, bool) {
 	}
 
 	return withZeroWidth(p.findUnfiltered(haystack))
+}
+
+// findExactBytes scans the exact plan's byte alphabet with the same compiled
+// trie transitions and terminal ordering used by the folded executor.
+func (p *searchPlan) findExactBytes(haystack string) (Match, bool) {
+	state, bestUnitStart := 0, -1
+	best := Match{Pattern: -1, Start: -1}
+	if p.empty >= 0 {
+		bestUnitStart = 0
+		best = Match{Pattern: p.empty, Start: 0}
+	}
+
+	for at := 0; at < len(haystack); at++ {
+		state = p.advance(state, p.byteTokens[haystack[at]])
+		if output := p.nodes[state].output; output.pattern >= 0 {
+			start := at - output.units + 1
+			if bestUnitStart < 0 || start < bestUnitStart ||
+				start == bestUnitStart && output.pattern < best.Pattern {
+				bestUnitStart = start
+				best = Match{Pattern: output.pattern, Start: start}
+			}
+		}
+		if bestUnitStart >= 0 && at >= bestUnitStart+p.maxUnits-1 {
+			return best, true
+		}
+	}
+	if bestUnitStart < 0 {
+		return Match{}, false
+	}
+	return best, true
 }
 
 // findWithWidthAfterASCIIOnly enters the post-ASCII decision tree when a
@@ -3178,10 +3242,10 @@ func (p *searchPlan) findFiltered(haystack string) (Match, bool) {
 			} else if value >= 0xc2 && value <= 0xdf && at+1 < len(haystack) {
 				trail := haystack[at+1]
 				if trail >= 0x80 && trail < 0xc0 {
-					row := p.opaque[value]
+					row := p.byteTokens[value]
 					if row == 0 {
 						state = 0
-					} else if token := p.opaque[(int(row)-1)*rawByteTrailClasses+int(trail-0x80)]; token == 0 {
+					} else if token := p.byteTokens[(int(row)-1)*rawByteTrailClasses+int(trail-0x80)]; token == 0 {
 						state = 0
 					} else {
 						state = int(p.dense[state*p.stride+int(token)])

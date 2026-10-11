@@ -39,7 +39,7 @@ func (p *searchPlan) rawByteTokenConfigFor() (rawByteTokenConfig, bool) {
 		len(p.dense) > rawByteMaxTransitionSize/4 {
 		return config, false
 	}
-	for _, token := range p.opaque {
+	for _, token := range p.byteTokens {
 		if token != 0 {
 			return config, false
 		}
@@ -106,11 +106,11 @@ func (p *searchPlan) makeRawByteTokenPlan(patterns []string) {
 	if !ok {
 		return
 	}
-	copy(p.opaque[:rawByteTokenClasses], config.tokens[:])
+	copy(p.byteTokens[:rawByteTokenClasses], config.tokens[:])
 	for row := 0; row < int(config.leadN); row++ {
-		p.opaque[config.leads[row]] = uint32(row + 1)
+		p.byteTokens[config.leads[row]] = uint32(row + 1)
 	}
-	p.singleTokens = p.opaque[:0]
+	p.singleTokens = p.byteTokens[:0]
 	p.makeRawByteMultiAnchorFilter(patterns)
 	if p.rawByteMulti.usable() {
 		p.rawByteOrigin = rawByteOriginGateFor(patterns)
@@ -143,13 +143,13 @@ func (p *searchPlan) rawByteAdvance(haystack string, at, state int) (next, size 
 	if trail < 0x80 || trail >= 0xc0 {
 		return 0, 0, false
 	}
-	row := p.opaque[value]
+	row := p.byteTokens[value]
 	if row == 0 {
 		// This valid two-byte rune is absent from every pattern orbit, so its
 		// decoded token is zero and the shared state machine resets.
 		return 0, 2, true
 	}
-	token := p.opaque[(int(row)-1)*rawByteTrailClasses+int(trail-0x80)]
+	token := p.byteTokens[(int(row)-1)*rawByteTrailClasses+int(trail-0x80)]
 	return p.rawByteAdvanceToken(state, token), 2, true
 }
 

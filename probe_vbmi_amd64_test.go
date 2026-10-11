@@ -17,7 +17,7 @@ func testVBMIProbe(t *testing.T) *asciiProbe {
 	if !cpu.X86.HasAVX512F || !cpu.X86.HasAVX512BW || !cpu.X86.HasAVX512VBMI {
 		t.Skip("AVX-512 VBMI probe path is disabled")
 	}
-	plan := newSearchPlan([]string{"goto retryLabel"})
+	plan := newSearchPlan([]string{"goto retryLabel"}, false)
 	if !plan.asciiProbe.usable() || plan.asciiProbe.vbmi.valid == 0 {
 		t.Fatalf("did not compile a VBMI probe: %+v", plan.asciiProbe)
 	}
@@ -157,7 +157,7 @@ func testVBMIPairProbe(t *testing.T) *asciiPairProbe {
 	if got := unsafe.Offsetof(asciiPairVBMIProbe{}.secondAt); got != 128 {
 		t.Fatalf("asciiPairVBMIProbe.secondAt offset = %d, want 128", got)
 	}
-	plan := newSearchPlan([]string{"goto retryLabel"})
+	plan := newSearchPlan([]string{"goto retryLabel"}, false)
 	if !plan.asciiPairVBMIDisplaced() {
 		t.Fatalf("did not compile a displaced VBMI pair: %+v", plan.asciiPair.vbmi)
 	}

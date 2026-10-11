@@ -197,7 +197,7 @@ func BenchmarkRawByteFindAfterFreshFind(b *testing.B) {
 }
 
 func BenchmarkTripleSkipBytes(b *testing.B) {
-	plan := newSearchPlan([]string{"fatal panic", "segfault detected"})
+	plan := newSearchPlan([]string{"fatal panic", "segfault detected"}, false)
 	haystack := strings.Repeat("x", 1<<20)
 	b.SetBytes(int64(len(haystack)))
 	for b.Loop() {
@@ -206,7 +206,7 @@ func BenchmarkTripleSkipBytes(b *testing.B) {
 }
 
 func BenchmarkTriplePlan(b *testing.B) {
-	plan := newSearchPlan([]string{"fatal panic", "segfault detected"})
+	plan := newSearchPlan([]string{"fatal panic", "segfault detected"}, false)
 	haystack := strings.Repeat("x", 1<<20)
 	b.SetBytes(int64(len(haystack)))
 	for b.Loop() {

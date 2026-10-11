@@ -8,7 +8,7 @@ import (
 )
 
 func TestRawByteTokenPlanDirectTransitions(t *testing.T) {
-	plan := newSearchPlan(rawByteCyrillicPatterns)
+	plan := newSearchPlan(rawByteCyrillicPatterns, false)
 	if !plan.hasRawByteTokenPlan() {
 		t.Fatal("eligible Cyrillic plan did not retain a compact raw-byte map")
 	}
@@ -98,7 +98,7 @@ func rawByteSharedPrefixPatterns(n int) []string {
 func TestRawByteMultiAnchorRequiresTagDiversity(t *testing.T) {
 	for _, n := range []int{2, 4, 8} {
 		patterns := rawByteSharedPrefixPatterns(n)
-		plan := newSearchPlan(patterns)
+		plan := newSearchPlan(patterns, false)
 		if !plan.hasRawByteTokenPlan() {
 			t.Fatalf("N=%d shared-prefix plan lost the compact raw-byte map", n)
 		}
@@ -124,7 +124,7 @@ func TestRawByteMultiAnchorRequiresTagDiversity(t *testing.T) {
 		"чшщьыъ4", "ыьэюяа5", "бвгдеж6", "зийклм7",
 	}
 	for _, patterns := range [][]string{rawByteCyrillicPatterns, diverse} {
-		plan := newSearchPlan(patterns)
+		plan := newSearchPlan(patterns, false)
 		if !plan.rawByteMulti.usable() || !plan.rawByteMulti.tagDiverse() {
 			t.Fatalf("diverse anchors were not admitted: patterns=%q usable=%t diverse=%t", patterns, plan.rawByteMulti.usable(), plan.rawByteMulti.tagDiverse())
 		}
@@ -144,7 +144,7 @@ func TestRawByteFilteredDensityUsesDirectTransitions(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			haystack := rawByteFalseCandidates(tc.period, tc.groups)
-			plan := newSearchPlan(tc.patterns)
+			plan := newSearchPlan(tc.patterns, false)
 			if plan.unicodePairN != 0 || plan.unicodeAnchor.n != 0 || !plan.filter.usable() {
 				t.Fatalf("fixture does not select generic filtered search: pairs=%d anchor=%d filter=%t",
 					plan.unicodePairN, plan.unicodeAnchor.n, plan.filter.usable())
@@ -204,7 +204,7 @@ func TestRawByteTokenPlanPreservesFallbackOffsetsAndTies(t *testing.T) {
 }
 
 func TestRawByteOriginDoesNotEnterASCIIOnlyPartition(t *testing.T) {
-	plan := newSearchPlan(rawByteCyrillicPatterns)
+	plan := newSearchPlan(rawByteCyrillicPatterns, false)
 	if plan.patternCount != len(rawByteCyrillicPatterns) || plan.asciiOnly {
 		t.Fatalf("raw transition plan changed ASCII-only admission: patterns=%d asciiOnly=%t", plan.patternCount, plan.asciiOnly)
 	}
@@ -217,7 +217,7 @@ func TestRawByteOriginDoesNotEnterASCIIOnlyPartition(t *testing.T) {
 }
 
 func TestRawByteOriginGatePreservesFind(t *testing.T) {
-	plan := newSearchPlan(rawByteCyrillicPatterns)
+	plan := newSearchPlan(rawByteCyrillicPatterns, false)
 	if !plan.rawByteMulti.usable() || !plan.rawByteOrigin.usable() {
 		t.Fatal("eligible plan did not compile the tagged filter and origin gate")
 	}
@@ -577,7 +577,7 @@ func TestRawByteMultiVariableWidthEOFDifferential(t *testing.T) {
 }
 
 func TestRawByteMultiAnchorSkipNeverPassesAConfirmedTag(t *testing.T) {
-	plan := newSearchPlan(rawByteCyrillicPatterns)
+	plan := newSearchPlan(rawByteCyrillicPatterns, false)
 	filter := &plan.rawByteMulti
 	if !filter.usable() {
 		t.Fatal("eligible plan did not compile a raw multi-anchor filter")
@@ -665,7 +665,7 @@ func TestRawByteMultiAnchorScalarScreenUnionsConfirmationGroups(t *testing.T) {
 // alias but never skips an exact tagged anchor. The later tagsAt replay remains
 // the match authority.
 func TestRawByteMultiAnchorScalarScreenNeverPassesConfirmedTag(t *testing.T) {
-	plan := newSearchPlan(rawByteCyrillicPatterns)
+	plan := newSearchPlan(rawByteCyrillicPatterns, false)
 	filter := &plan.rawByteMulti
 	if !filter.usable() {
 		t.Fatal("eligible plan did not compile a raw multi-anchor filter")

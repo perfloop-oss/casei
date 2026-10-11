@@ -28,7 +28,7 @@ func decodedPlanFind(p *searchPlan, haystack string) (Match, bool) {
 }
 
 func TestASCIIPartitionPlanAdmission(t *testing.T) {
-	plan := newSearchPlan(asciiPartitionPatterns())
+	plan := newSearchPlan(asciiPartitionPatterns(), false)
 	if runtimeVectorBits() != 512 {
 		t.Skipf("ASCII partition is runtime-gated to AVX-512; vector width %d", runtimeVectorBits())
 	}
@@ -47,7 +47,7 @@ func TestASCIIPartitionPlanAdmission(t *testing.T) {
 
 func TestASCIIPartitionDifferential(t *testing.T) {
 	patterns := asciiPartitionPatterns()
-	plan := newSearchPlan(patterns)
+	plan := newSearchPlan(patterns, false)
 	matcher := NewMatcher(patterns)
 	rng := rand.New(rand.NewPCG(20260829, 17))
 	units := []string{
@@ -77,7 +77,7 @@ func TestASCIIPartitionDifferential(t *testing.T) {
 
 func TestASCIIPartitionPositionDensityAndBoundaries(t *testing.T) {
 	patterns := asciiPartitionPatterns()
-	plan := newSearchPlan(patterns)
+	plan := newSearchPlan(patterns, false)
 	matcher := NewMatcher(patterns)
 	for _, size := range []int{1, 63, 64, 127, 1024, 8192} {
 		for _, gap := range []int{1, 7, 31, 127, 511} {
@@ -130,7 +130,7 @@ func TestASCIIPartitionPositionDensityAndBoundaries(t *testing.T) {
 
 func TestASCIIPartitionWidthChangingBoundaries(t *testing.T) {
 	patterns := append(asciiPartitionPatterns(), "абвkK0", "гдеsſ1")
-	plan := newSearchPlan(patterns)
+	plan := newSearchPlan(patterns, false)
 	if !plan.asciiPartitionUsable() {
 		t.Skipf("width-changing fixture is not admitted on vector width %d", runtimeVectorBits())
 	}
@@ -179,7 +179,7 @@ func TestASCIIPartitionEachContract(t *testing.T) {
 
 func TestASCIIPartitionReportsWorkSplit(t *testing.T) {
 	patterns := asciiPartitionPatterns()
-	plan := newSearchPlan(patterns)
+	plan := newSearchPlan(patterns, false)
 	if !plan.asciiPartitionUsable() {
 		t.Skipf("ASCII partition is runtime-gated to AVX-512; vector width %d", runtimeVectorBits())
 	}
@@ -215,7 +215,7 @@ func TestASCIIPartitionRejectsDenseExceptionalInput(t *testing.T) {
 	if runtimeVectorBits() != 512 {
 		t.Skipf("ASCII partition is runtime-gated to AVX-512; vector width %d", runtimeVectorBits())
 	}
-	plan := newSearchPlan(asciiPartitionPatterns())
+	plan := newSearchPlan(asciiPartitionPatterns(), false)
 	for _, tc := range []struct {
 		name     string
 		interval int
@@ -292,7 +292,7 @@ func TestASCIIPartitionRejectsDenseExceptionalInput(t *testing.T) {
 
 	widePatterns := asciiPartitionPatterns()
 	widePatterns[0] = strings.Repeat("q", 100000) + "0"
-	widePlan := newSearchPlan(widePatterns)
+	widePlan := newSearchPlan(widePatterns, false)
 	if !widePlan.asciiPartitionUsable() || widePlan.maxBytes < 100000 {
 		t.Fatalf("wide pattern did not retain the partition shape: usable=%t maxBytes=%d", widePlan.asciiPartitionUsable(), widePlan.maxBytes)
 	}
@@ -345,14 +345,14 @@ func TestASCIIPartitionFindAllocatesNothing(t *testing.T) {
 }
 
 func TestASCIIPartitionRejectsOpaqueContinuationPlans(t *testing.T) {
-	plan := newSearchPlan([]string{"\x80abc", "def0", "абв1", "где2", "жзи3", "йкл4", "мно5", "прс6", "туф7", "хцч8"})
+	plan := newSearchPlan([]string{"\x80abc", "def0", "абв1", "где2", "жзи3", "йкл4", "мно5", "прс6", "туф7", "хцч8"}, false)
 	if plan.asciiPartitionUsable() {
 		t.Fatal("opaque continuation plan entered the ASCII partition route")
 	}
 }
 
 func TestASCIIOnlyPartitionAdmission(t *testing.T) {
-	plan := newSearchPlan([]string{"Sherlock Holmes"})
+	plan := newSearchPlan([]string{"Sherlock Holmes"}, false)
 	if !plan.asciiOnly || plan.asciiOnlyLong {
 		t.Fatalf("letter-only ASCII plan = asciiOnly:%t long:%t", plan.asciiOnly, plan.asciiOnlyLong)
 	}
@@ -365,7 +365,7 @@ func TestASCIIOnlyPartitionAdmission(t *testing.T) {
 	if !plan.asciiOnlyPartitionUsable() {
 		t.Fatal("long N=1 ASCII-only partition was not admitted")
 	}
-	structured := newSearchPlan([]string{"[keys[i%"})
+	structured := newSearchPlan([]string{"[keys[i%"}, false)
 	if !structured.asciiOnly || !structured.asciiOnlyLong || structured.asciiOnlyPartitionUsable() {
 		t.Fatalf("structured ASCII plan changed admission: asciiOnly=%t long=%t usable=%t", structured.asciiOnly, structured.asciiOnlyLong, structured.asciiOnlyPartitionUsable())
 	}
@@ -373,7 +373,7 @@ func TestASCIIOnlyPartitionAdmission(t *testing.T) {
 
 func TestASCIIOnlyPartitionDifferential(t *testing.T) {
 	patterns := []string{"Sherlock Holmes"}
-	plan := newSearchPlan(patterns)
+	plan := newSearchPlan(patterns, false)
 	matcher := NewMatcher(patterns)
 	maxBytes := plan.maxBytes
 	cases := []string{
@@ -406,7 +406,7 @@ func TestASCIIOnlyPartitionWorkSplitAndFallback(t *testing.T) {
 	if runtimeVectorBits() != 512 {
 		t.Skipf("ASCII-only partition is runtime-gated to AVX-512; vector width %d", runtimeVectorBits())
 	}
-	plan := newSearchPlan([]string{"Sherlock Holmes"})
+	plan := newSearchPlan([]string{"Sherlock Holmes"}, false)
 	input := []byte(strings.Repeat("x", 1<<16))
 	copy(input[4096:], "ſK")
 	haystack := string(input)
@@ -471,7 +471,7 @@ func TestASCIIOnlyPartitionEachWidth(t *testing.T) {
 
 func TestASCIIOnlyPartitionRandomDifferential(t *testing.T) {
 	patterns := []string{"Sherlock Holmes"}
-	plan := newSearchPlan(patterns)
+	plan := newSearchPlan(patterns, false)
 	matcher := NewMatcher(patterns)
 	rng := rand.New(rand.NewPCG(20260829, 31))
 	units := []string{"x", "X", " ", "q", "€", "ſ", "K", "Ж", "\xff"}

@@ -50,7 +50,7 @@ func TestASCIIInteriorAdmissionAndOffsets(t *testing.T) {
 	for _, pattern := range []string{
 		"ab", "sss", "kss", "skherlo", "ssabcdef", "[keys[i%", "abcdef", "яabcdef", "\xffabcdef", "s" + strings.Repeat("a", 64),
 	} {
-		if p := newSearchPlan([]string{pattern}); p.asciiProbe.firstAt != 0 {
+		if p := newSearchPlan([]string{pattern}, false); p.asciiProbe.firstAt != 0 {
 			t.Fatalf("%q unexpectedly admitted to interior probe: %+v", pattern, p.asciiProbe)
 		}
 	}

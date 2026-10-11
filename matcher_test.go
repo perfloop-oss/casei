@@ -235,7 +235,7 @@ func TestMatcherPairPrefixBoundaries(t *testing.T) {
 
 func TestMatcherUnicodePairPairBoundaries(t *testing.T) {
 	patterns := []string{"яр"}
-	plan := newSearchPlan(patterns)
+	plan := newSearchPlan(patterns, false)
 	if plan.unicodePairN < 2 || plan.unicodePairs[0].pairPair.valid == 0 {
 		t.Fatalf("no dispersed pair transition: %+v", plan.unicodePairs[0])
 	}
@@ -336,7 +336,7 @@ func TestMatcherMatchesRegexpAlternation(t *testing.T) {
 
 func TestMatcherASCIIAnchored(t *testing.T) {
 	patterns := []string{"щупальце", "kelvin", "zygomorphic", "ſecret", "Zq9xW", "grofse", "ΤΈΛΟΣ", "watchdog"}
-	plan := newSearchPlan(patterns)
+	plan := newSearchPlan(patterns, false)
 	if !plan.asciiPairAnchors.usable() {
 		t.Fatalf("mixed plan did not compile the all-ASCII pair transition: %+v", plan.asciiPairAnchors)
 	}
@@ -433,7 +433,7 @@ func TestMatcherASCIIPairAnchorOrderAndTies(t *testing.T) {
 	// pattern's pair is later. This makes pair encounter order disagree with
 	// source-start order and pins the max-offset delay plus plan replay.
 	patterns := []string{"Ωmega", "azqXzqYab", "zqX", "kelvin", "watchdog", "grofse"}
-	plan := newSearchPlan(patterns)
+	plan := newSearchPlan(patterns, false)
 	if !plan.asciiPairAnchors.usable() {
 		t.Fatalf("order plan did not compile pair anchors: %+v", plan.asciiPairAnchors)
 	}
@@ -487,7 +487,7 @@ func TestMatcherASCIIPairAnchorOrderAndTies(t *testing.T) {
 	// therefore represented as '{' in the table, which can admit a brace but
 	// must still retain the actual bracket occurrence for plan confirmation.
 	punctuated := append(append([]string(nil), patterns...), "ab[cd")
-	punctuatedPlan := newSearchPlan(punctuated)
+	punctuatedPlan := newSearchPlan(punctuated, false)
 	var punct asciiPairAnchor
 	for i := range punctuatedPlan.asciiPairAnchors.n {
 		anchor := punctuatedPlan.asciiPairAnchors.anchors[i]
@@ -530,7 +530,7 @@ func TestMatcherFilteredUTF8Boundaries(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			plan := newSearchPlan(tc.patterns)
+			plan := newSearchPlan(tc.patterns, false)
 			got, gotOK := plan.find(tc.haystack)
 			want, wantOK := refFind(tc.haystack, tc.patterns)
 			if gotOK != wantOK || gotOK && got != want {
@@ -547,7 +547,7 @@ func TestMatcherFilteredUTF8Boundaries(t *testing.T) {
 				continue
 			}
 			patterns := []string{haystack[at:]}
-			plan := newSearchPlan(patterns)
+			plan := newSearchPlan(patterns, false)
 			if !plan.opaqueContinuation {
 				t.Fatalf("continuation suffix %x did not retain its boundary guard", patterns[0])
 			}
