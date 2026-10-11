@@ -457,8 +457,12 @@ func rawByteMultiAnchorSelectCandidate(pattern string, units *[rawByteMultiAncho
 			if guard < 0 || !filter.canAddConfirmationOffsets(confirmWidths.offsets[:confirmWidths.n]) {
 				continue
 			}
+			score := costs[primary] + costs[confirm] + costs[guard]
+			if found && (confirmWidths.n > best.anchor.confirmN || confirmWidths.n == best.anchor.confirmN && score > best.score) {
+				continue
+			}
 			guardWidths := relative[guard]
-			candidate := rawByteMultiAnchorCandidate{
+			best = rawByteMultiAnchorCandidate{
 				anchor: rawByteMultiAnchor{
 					primary:  units[primary].pairs,
 					confirm:  units[confirm].pairs,
@@ -468,15 +472,14 @@ func rawByteMultiAnchorSelectCandidate(pattern string, units *[rawByteMultiAncho
 					confirmN: confirmWidths.n,
 					guardN:   guardWidths.n,
 				},
-				score: costs[primary] + costs[confirm] + costs[guard],
+				score: score,
 				at:    units[primary].at,
 			}
-			copy(candidate.anchor.confirmOffset[:], confirmWidths.offsets[:confirmWidths.n])
-			copy(candidate.anchor.guardOffset[:], guardWidths.offsets[:guardWidths.n])
-			if !found || candidate.anchor.confirmN < best.anchor.confirmN ||
-				candidate.anchor.confirmN == best.anchor.confirmN && (candidate.score < best.score || candidate.score == best.score && candidate.at >= best.at) {
-				best, found = candidate, true
-			}
+			copy(best.anchor.confirmOffset[:], confirmWidths.offsets[:confirmWidths.n])
+			copy(best.anchor.guardOffset[:], guardWidths.offsets[:guardWidths.n])
+			// Primary positions ascend and confirmations descend. Replacing an
+			// exact score tie keeps the later primary or the earlier confirmation.
+			found = true
 		}
 	}
 	return best, found
