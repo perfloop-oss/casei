@@ -320,8 +320,8 @@ func BenchmarkMatcher(b *testing.B) {
 				_, _, matcherFound = pcre.Find(s.haystack)
 			}
 		})
-		// This diagnostic lane remains useful for the adapter, but BenchmarkBar
-		// admits it only after the query-level Rust dispatch audit sees AVX2.
+		// This diagnostic lane remains useful for the adapter. The observed Rust
+		// dispatch width is only a diagnostic and never removes rure from the field.
 		rure := rureAlts[scenarioIndex]
 		b.Run(s.name+"/rure", func(b *testing.B) {
 			b.SetBytes(int64(len(s.haystack)))
