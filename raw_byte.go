@@ -441,18 +441,18 @@ func rawByteMultiAnchorSelectCandidate(pattern string, units *[rawByteMultiAncho
 		}
 		var relative [rawByteMultiAnchorUnitCapacity]rawByteMultiAnchorWidthSet
 		rawByteMultiAnchorRelativeWidthsByPrimary(pattern, units, unitN, primary, &relative)
-		for confirm := primary + 1; confirm < unitN; confirm++ {
+		// As confirmations move backward, maintain the cheapest feasible
+		// later guard for the remaining suffix. On equal costs, the newly
+		// exposed guard is earlier and preserves the ascending triple loop's tie.
+		guard := -1
+		for confirm := unitN - 2; confirm > primary; confirm-- {
+			later := confirm + 1
+			if relative[later].n != 0 && (guard < 0 || costs[later] <= costs[guard]) {
+				guard = later
+			}
 			confirmWidths := relative[confirm]
 			if confirmWidths.n == 0 || confirmWidths.n > rawByteMultiAnchorConfirmGroups {
 				continue
-			}
-			// The pair cost is additive. Keep the first feasible guard when
-			// costs tie, matching the former ascending triple loop.
-			guard := -1
-			for candidate := confirm + 1; candidate < unitN; candidate++ {
-				if relative[candidate].n != 0 && (guard < 0 || costs[candidate] < costs[guard]) {
-					guard = candidate
-				}
 			}
 			if guard < 0 || !filter.canAddConfirmationOffsets(confirmWidths.offsets[:confirmWidths.n]) {
 				continue
@@ -474,7 +474,7 @@ func rawByteMultiAnchorSelectCandidate(pattern string, units *[rawByteMultiAncho
 			copy(candidate.anchor.confirmOffset[:], confirmWidths.offsets[:confirmWidths.n])
 			copy(candidate.anchor.guardOffset[:], guardWidths.offsets[:guardWidths.n])
 			if !found || candidate.anchor.confirmN < best.anchor.confirmN ||
-				candidate.anchor.confirmN == best.anchor.confirmN && (candidate.score < best.score || candidate.score == best.score && candidate.at > best.at) {
+				candidate.anchor.confirmN == best.anchor.confirmN && (candidate.score < best.score || candidate.score == best.score && candidate.at >= best.at) {
 				best, found = candidate, true
 			}
 		}
