@@ -30,9 +30,9 @@
 #                  for equivalence is timed as part of the entrant it adapts.
 #
 # exact_tier lists the tiers where an entrant's native case-sensitive mode,
-# its fold flag dropped, answers the board's case-sensitive cells against the
-# raw-byte oracle. An entrant without it has no exact mode and supports no
-# case-sensitive cell.
+# its fold flag dropped (PCRE2 also drops PCRE2_UTF, for byte mode), answers
+# the board's case-sensitive cells against the raw-byte oracle. An entrant
+# without it has no exact mode and supports no case-sensitive cell.
 #
 # Reporting rule: state which entrants a row actually ran against, and report
 # rows the candidate loses next to the ones it wins.

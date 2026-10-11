@@ -8,13 +8,13 @@ package pcre2
 #include <stdbool.h>
 #include <stddef.h>
 
-// casei_pcre2_compile_8 compiles in UTF mode, caseless unless exact.
+// casei_pcre2_compile_8 compiles caseless in UTF mode, or exact in byte mode.
 static pcre2_code_8 *casei_pcre2_compile_8(const char *pattern, size_t length,
 	bool exact, int *error_code, size_t *error_offset) {
 	PCRE2_SIZE offset = 0;
 	pcre2_code_8 *code = pcre2_compile_8(
 		(PCRE2_SPTR8)pattern, (PCRE2_SIZE)length,
-		exact ? PCRE2_UTF : PCRE2_CASELESS | PCRE2_UTF, error_code, &offset, NULL);
+		exact ? 0 : PCRE2_CASELESS | PCRE2_UTF, error_code, &offset, NULL);
 	*error_offset = (size_t)offset;
 	return code;
 }
@@ -80,9 +80,9 @@ import (
 	"unsafe"
 )
 
-// Regex is a PCRE2_UTF pattern, PCRE2_CASELESS unless compiled exact, whose
-// PCRE2 JIT compilation succeeded. Match data is pooled because PCRE2 writes
-// its ovector per match.
+// Regex is a PCRE2 pattern whose JIT compilation succeeded: caseless in UTF
+// mode, or exact in byte mode. Match data is pooled because PCRE2 writes its
+// ovector per match.
 type Regex struct {
 	code    *C.pcre2_code_8
 	pattern int       // the pattern ID Find and Each report: 0, or -1 for an alternation
@@ -112,9 +112,10 @@ func pointer(s string) *C.char {
 	return (*C.char)(unsafe.Pointer(unsafe.StringData(s)))
 }
 
-// Compile builds and JIT-compiles pattern. exact drops PCRE2_CASELESS,
-// PCRE2's case-sensitive mode. It returns an error instead of falling back to
-// interpreted PCRE2.
+// Compile builds and JIT-compiles pattern. exact compiles PCRE2's
+// case-sensitive byte mode: without PCRE2_CASELESS, and without PCRE2_UTF,
+// which changes no literal match on valid UTF-8. It returns an error instead
+// of falling back to interpreted PCRE2.
 func Compile(pattern string, exact bool) (*Regex, error) {
 	var compileError C.int
 	var errorOffset C.size_t
