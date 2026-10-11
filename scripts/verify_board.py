@@ -10,8 +10,9 @@
   entrant that supports a cell was timed: on a case-sensitive cell, every
   entrant with an exact mode. (BenchmarkBoard fails a cell outright on any
   wrong answer, so a wrong answer leaves its cell out of the run.)
-- A cell's x_vs_best is its largest entrant ratio, casei's time over that of
-  the fastest entrant; no cell is above 1.10.
+- Every timed entrant's ratio is positive and finite. A cell's x_vs_best is
+  its largest entrant ratio, casei's time over that of the fastest entrant; no
+  cell is above 1.10.
 - Every family's aggregate x_vs_best is below 1.0. Cells weigh equally, so the
   aggregate is the mean of the family's x_vs_best: casei's total time over the
   fastest entrants', with each cell normalized to its fastest entrant.
@@ -19,6 +20,7 @@
 
 import argparse
 from collections import defaultdict
+import math
 from pathlib import Path
 import re
 import sys
@@ -111,7 +113,10 @@ def verify(path, pinned=PINNED, family=None):
             want = supported(name, tiers.get(name))
             failures += [f"{name}: {e}_active={cell[f'{e}_active']:g}, want {int(e in want)}"
                          for e in ENTRANTS if cell[f"{e}_active"] != (e in want)]
-            x = max((cell[f"{e}_x"] for e in ENTRANTS if cell[f"{e}_active"] == 1), default=0)
+            ratios = {e: cell[f"{e}_x"] for e in ENTRANTS if cell[f"{e}_active"] == 1}
+            failures += [f"{name}: {e}_x={r:g} is not a positive finite ratio"
+                         for e, r in ratios.items() if not 0 < r < math.inf]
+            x = max(ratios.values(), default=0)
             if not 0 < x <= CELL_LIMIT:
                 failures.append(f"{name}: x_vs_best={x:.4f} is outside (0, {CELL_LIMIT}]")
         families[name.split("/")[0]].append(x)
