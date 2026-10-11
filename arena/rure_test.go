@@ -85,7 +85,7 @@ func TestRureDispatchIsObserved(t *testing.T) {
 		t.Fatalf("long literal match = %d, want miss", got)
 	}
 	// CPU support is deliberately not enough: this pinned Rust query uses its
-	// scalar memmem path, so it must remain excluded from the AVX2 field.
+	// scalar memmem path, so it must report no vector width.
 	if got := long.VectorBits(); got != 0 {
 		t.Errorf("long literal dispatch = %d, want no observed memchr vector path", got)
 	}
@@ -97,16 +97,16 @@ func TestRureDispatchIsObserved(t *testing.T) {
 	if _, _, ok := alternation.Find(haystack); ok {
 		t.Fatal("alternation matched, want miss")
 	}
-	// Capturing alternation uses the other private C entry point. It must record
-	// its own unobserved result, not retain the prior literal's AVX2 observation.
+	// The alternation must record its own unobserved result, not retain the
+	// prior literal's AVX2 observation.
 	if got := alternation.VectorBits(); got != 0 {
 		t.Errorf("alternation dispatch = %d, want no observed memchr vector path", got)
 	}
 }
 
 func TestRureFoldHazardsAgree(t *testing.T) {
-	// rust-regex must agree with the independent simple-fold oracle before an
-	// observed AVX2 memchr query can enter the field.
+	// rust-regex must agree with the independent simple-fold oracle before it
+	// can enter the field.
 	cases := []struct {
 		name     string
 		haystack string
@@ -158,9 +158,10 @@ func TestRureFoldHazardsAgree(t *testing.T) {
 }
 
 func TestRureAlternationHazardsAgree(t *testing.T) {
-	// Ordered capture branches expose rust-regex's leftmost-first choice as an
-	// arena pattern ID; the oracle probes ties and differing source starts before
-	// any query-level dispatch result is eligible to race.
+	// rust-regex's leftmost-first choice must start where the arena's
+	// lowest-pattern-index rule does; the oracle probes ties and differing
+	// source starts before any query is timed.
+	// The alternation reports no pattern ID.
 	cases := []struct {
 		haystack string
 		patterns []string
@@ -180,7 +181,7 @@ func TestRureAlternationHazardsAgree(t *testing.T) {
 		}
 		start, pattern, ok := re.Find(tc.haystack)
 		want, wantOK := refFind(tc.haystack, tc.patterns)
-		if ok != wantOK || (ok && (start != want.Start || pattern != want.Pattern)) {
+		if ok != wantOK || (ok && (start != want.Start || pattern != -1)) {
 			t.Errorf("Find(%q, %q) = {%d %d},%v want %+v,%v", tc.haystack, tc.patterns, pattern, start, ok, want, wantOK)
 		}
 	}

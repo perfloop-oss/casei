@@ -9,8 +9,8 @@ import (
 
 type pcre2Regex = pcre2jit.Regex
 
-func newPCRE2Regex(pattern string, captures int) (*pcre2Regex, error) {
-	return pcre2jit.Compile(pattern, captures)
+func newPCRE2Regex(pattern string) (*pcre2Regex, error) {
+	return pcre2jit.Compile(pattern)
 }
 
 func pcre2QuoteMeta(s string) string { return pcre2jit.QuoteMeta(s) }
@@ -19,8 +19,8 @@ func newPCRE2Alternation(patterns []string) (*pcre2Regex, error) {
 	return pcre2jit.CompileAlternation(patterns)
 }
 
-func mustPCRE2Regex(pattern string, captures int) *pcre2Regex {
-	re, err := newPCRE2Regex(pattern, captures)
+func mustPCRE2Regex(pattern string) *pcre2Regex {
+	re, err := newPCRE2Regex(pattern)
 	if err != nil {
 		panic(fmt.Sprintf("PCRE2 JIT baseline unavailable: %v", err))
 	}
@@ -31,7 +31,7 @@ var pcre2Singles = func() map[string]*pcre2Regex {
 	out := make(map[string]*pcre2Regex)
 	for _, s := range singleScenarios {
 		if _, ok := out[s.needle]; !ok {
-			out[s.needle] = mustPCRE2Regex(pcre2QuoteMeta(s.needle), 0)
+			out[s.needle] = mustPCRE2Regex(pcre2QuoteMeta(s.needle))
 		}
 	}
 	return out
@@ -79,7 +79,7 @@ func TestPCRE2FoldHazardsAgree(t *testing.T) {
 		{"literal quote terminator", "x\\Ey", "\\E"},
 	}
 	for _, tc := range cases {
-		re, err := newPCRE2Regex(pcre2QuoteMeta(tc.needle), 0)
+		re, err := newPCRE2Regex(pcre2QuoteMeta(tc.needle))
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
@@ -99,7 +99,7 @@ func TestPCRE2FoldHazardsAgree(t *testing.T) {
 		for _, haystackForm := range orbit {
 			for _, needleForm := range orbit {
 				haystack := "x" + haystackForm + "y"
-				re, err := newPCRE2Regex(pcre2QuoteMeta(needleForm), 0)
+				re, err := newPCRE2Regex(pcre2QuoteMeta(needleForm))
 				if err != nil {
 					t.Fatalf("%q/%q: %v", haystackForm, needleForm, err)
 				}
@@ -128,7 +128,7 @@ func TestPCRE2AlternationHazardsAgree(t *testing.T) {
 		}
 		start, pattern, ok := re.Find(tc.haystack)
 		want, wantOK := refFind(tc.haystack, tc.patterns)
-		if ok != wantOK || (ok && (start != want.Start || pattern != want.Pattern)) {
+		if ok != wantOK || (ok && (start != want.Start || pattern != -1)) {
 			t.Errorf("Find(%q, %q) = {%d %d},%v want %+v,%v", tc.haystack, tc.patterns, pattern, start, ok, want, wantOK)
 		}
 	}

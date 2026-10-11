@@ -9,9 +9,9 @@ package arena_test
 //                semantic anchor for leftmost-start
 //   pcre2-jit  - precompiled PCRE2 caseless UTF-8 alternation, with JIT
 //                required before it enters either valid-UTF-8 tier
-//   rure       - precompiled rust-regex C API (?i) alternation; capture branches
-//                expose its leftmost-first selection as a pattern ID, and only
-//                an observed memchr AVX2 query can enter the competitive bar
+//   rure       - precompiled rust-regex C API (?i) alternation without
+//                captures, which would turn off its literal-set fast path; its
+//                observed memchr width is a diagnostic, never an exclusion
 //   vectorscan - precompiled Vectorscan caseless literal set; its scan adapter
 //                reduces all reports to leftmost/lowest-pattern order
 //   stringzilla - precompiled full-fold StringZilla literals; the timed adapter
@@ -226,8 +226,8 @@ func foldAll(patterns []string, utf8Tier bool) []string {
 }
 
 // TestMultiBaselinesAgree pins the multi-needle contract: candidate, each
-// native adapter, and the ASCII-tier AC baseline against refFind; regexpAlt is
-// checked on match start.
+// native adapter, and the ASCII-tier AC baseline against refFind; regexpAlt,
+// pcre2-jit, and rure report no pattern ID, so they are checked on match start.
 func TestMultiBaselinesAgree(t *testing.T) {
 	for scenarioIndex, s := range multiScenarios {
 		want, wantOK := refFind(s.haystack, s.patterns)
@@ -253,12 +253,12 @@ func TestMultiBaselinesAgree(t *testing.T) {
 		}
 		pcre := pcre2Alts[scenarioIndex]
 		start, pattern, pcreOK := pcre.Find(s.haystack)
-		if pcreOK != wantOK || (pcreOK && (start != want.Start || pattern != want.Pattern)) {
+		if pcreOK != wantOK || (pcreOK && (start != want.Start || pattern != -1)) {
 			t.Errorf("%s/pcre2-jit: {%d %d},%v want %+v,%v", s.name, pattern, start, pcreOK, want, wantOK)
 		}
 		rure := rureAlts[scenarioIndex]
 		start, pattern, rureOK := rure.Find(s.haystack)
-		if rureOK != wantOK || (rureOK && (start != want.Start || pattern != want.Pattern)) {
+		if rureOK != wantOK || (rureOK && (start != want.Start || pattern != -1)) {
 			t.Errorf("%s/rure: {%d %d},%v want %+v,%v", s.name, pattern, start, rureOK, want, wantOK)
 		}
 		vectorscan := vectorscanAlts[scenarioIndex]
@@ -320,8 +320,8 @@ func BenchmarkMatcher(b *testing.B) {
 				_, _, matcherFound = pcre.Find(s.haystack)
 			}
 		})
-		// This diagnostic lane remains useful for the adapter, but BenchmarkBar
-		// admits it only after the query-level Rust dispatch audit sees AVX2.
+		// This diagnostic lane remains useful for the adapter. The observed Rust
+		// dispatch width is only a diagnostic and never removes rure from the field.
 		rure := rureAlts[scenarioIndex]
 		b.Run(s.name+"/rure", func(b *testing.B) {
 			b.SetBytes(int64(len(s.haystack)))
