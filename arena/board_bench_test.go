@@ -48,12 +48,6 @@ func BenchmarkBoard(b *testing.B) {
 					b.ReportMetric(value, unit)
 				}
 			}()
-			if spec.Sensitive {
-				// casei exposes NewExactMatcher, but BenchmarkBoard does not wire it yet.
-				for b.Loop() {
-				}
-				return
-			}
 			c, err := prepareBoardCell(spec, pinned[spec.Name()][1])
 			if err != nil {
 				b.Fatalf("cell %s: %v", spec.Name(), err)
@@ -87,22 +81,24 @@ func (r boardRun) run() { r.scan(func(board.Hit) bool { matcherSink++; return tr
 
 // prepareBoardCell builds the cell, checks it against its pinned digest, and
 // holds casei and every supporting entrant to the oracle before any timing, so
-// no ratio comes from a different cell or a wrong answer. The board plants
-// only fold mates every entrant handles (board.HazardMates), so any wrong
-// answer is a casei, board, or adapter bug and fails the cell.
+// no ratio comes from a different cell or a wrong answer. A case-sensitive
+// cell runs every implementation in its exact mode against the raw-byte
+// oracle. The board plants only fold mates every entrant handles
+// (board.HazardMates), so any wrong answer is a casei, board, or adapter bug
+// and fails the cell.
 func prepareBoardCell(spec board.Spec, digest string) (*boardCell, error) {
 	cell := spec.Build()
 	if got := cell.Digest(); got != digest {
 		return nil, fmt.Errorf("built digest %s, cells.txt has %q", got, digest)
 	}
-	want := board.Matches(cell.Haystack, cell.Patterns, false)
+	want := board.Matches(cell.Haystack, cell.Patterns, spec.Sensitive)
 	if spec.Op != "each" && len(want) > 1 {
 		want = want[:1]
 	}
-	c := &boardCell{candidate: boardCandidate(spec.Op, cell)}
+	c := &boardCell{candidate: boardCandidate(spec, cell)}
 	runs := []boardRun{c.candidate}
 	for _, name := range boardEntrants {
-		e, supported, err := boardEntrant(name, cell.Patterns, cell.ASCII)
+		e, supported, err := boardEntrant(name, cell.Patterns, cell.ASCII, spec.Sensitive)
 		if err != nil {
 			return nil, fmt.Errorf("%s supports the cell but cannot compile it: %v", name, err)
 		}
@@ -112,24 +108,38 @@ func prepareBoardCell(spec board.Spec, digest string) (*boardCell, error) {
 		}
 	}
 	for _, r := range runs {
-		var got []board.Hit
-		r.scan(func(h board.Hit) bool { got = append(got, h); return true })
-		if len(got) != len(want) {
-			return nil, fmt.Errorf("%s gives %d matches, oracle %d", r.name, len(got), len(want))
-		}
-		for i, h := range got {
-			if w := want[i]; h.Start != w.Start || h.Pattern >= 0 && h.Pattern != w.Pattern || h.Width >= 0 && h.Width != w.Width {
-				return nil, fmt.Errorf("%s match %d is %+v, oracle %+v", r.name, i, h, w)
-			}
+		if err := r.agree(want); err != nil {
+			return nil, err
 		}
 	}
 	return c, nil
 }
 
-func boardCandidate(op string, cell board.Cell) boardRun {
+// agree runs r once and holds its hits to the oracle's.
+func (r boardRun) agree(want []board.Hit) error {
+	var got []board.Hit
+	r.scan(func(h board.Hit) bool { got = append(got, h); return true })
+	if len(got) != len(want) {
+		return fmt.Errorf("%s gives %d matches, oracle %d", r.name, len(got), len(want))
+	}
+	for i, h := range got {
+		if w := want[i]; h.Start != w.Start || h.Pattern >= 0 && h.Pattern != w.Pattern || h.Width >= 0 && h.Width != w.Width {
+			return fmt.Errorf("%s match %d is %+v, oracle %+v", r.name, i, h, w)
+		}
+	}
+	return nil
+}
+
+// boardCandidate binds casei to the cell's operation: NewExactMatcher on a
+// case-sensitive cell, NewMatcher otherwise. IndexFold is folded by contract,
+// so the generator draws no case-sensitive IndexFold cell.
+func boardCandidate(spec board.Spec, cell board.Cell) boardRun {
 	h := cell.Haystack
 	m := casei.NewMatcher(cell.Patterns)
-	switch op {
+	if spec.Sensitive {
+		m = casei.NewExactMatcher(cell.Patterns)
+	}
+	switch spec.Op {
 	case "indexfold":
 		return boardRun{"casei", func(visit func(board.Hit) bool) {
 			if i := casei.IndexFold(h, cell.Patterns[0]); i >= 0 {
@@ -158,16 +168,17 @@ type boardEngine struct {
 	each func(h string, yield func(start, pattern, width int) bool) bool
 }
 
-// boardEntrant compiles one entrant when it supports the pattern set. The
-// support rules are field.yaml's tiers and the process gates BenchmarkBar
-// applies. A supporting entrant that fails to compile is an error.
-func boardEntrant(name string, patterns []string, asciiTier bool) (boardEngine, bool, error) {
+// boardEntrant compiles one entrant when it supports the pattern set, in its
+// native case-sensitive mode when exact. The support rules are field.yaml's
+// tiers and exact_tier and the process gates BenchmarkBar applies. A
+// supporting entrant that fails to compile is an error.
+func boardEntrant(name string, patterns []string, asciiTier, exact bool) (boardEngine, bool, error) {
 	single := len(patterns) == 1
 	switch name {
 	case "regexp":
 		// regexp's iterator, FindAllStringIndex, reports spans but not the
 		// alternative that matched.
-		re := regexpAltFor(patterns)
+		re := regexpAltFor(patterns, exact)
 		return boardEngine{
 			find: func(h string) (int, int, bool) {
 				if loc := re.FindStringIndex(h); loc != nil {
@@ -187,9 +198,9 @@ func boardEntrant(name string, patterns []string, asciiTier bool) (boardEngine, 
 	case "pcre2":
 		compile := pcre2jit.CompileAlternation
 		if single {
-			compile = func(p []string) (*pcre2jit.Regex, error) { return pcre2jit.CompileLiteral(p[0]) }
+			compile = func(p []string, exact bool) (*pcre2jit.Regex, error) { return pcre2jit.CompileLiteral(p[0], exact) }
 		}
-		re, err := compile(patterns)
+		re, err := compile(patterns, exact)
 		if err != nil {
 			return boardEngine{}, true, err
 		}
@@ -197,9 +208,9 @@ func boardEntrant(name string, patterns []string, asciiTier bool) (boardEngine, 
 	case "rure":
 		compile := rure.CompileAlternation
 		if single {
-			compile = func(p []string) (*rure.Regex, error) { return rure.CompileLiteral(p[0]) }
+			compile = func(p []string, exact bool) (*rure.Regex, error) { return rure.CompileLiteral(p[0], exact) }
 		}
-		re, err := compile(patterns)
+		re, err := compile(patterns, exact)
 		if err != nil {
 			return boardEngine{}, true, err
 		}
@@ -208,7 +219,7 @@ func boardEntrant(name string, patterns []string, asciiTier bool) (boardEngine, 
 		if bits, _ := expectedVectorscanBits(); bits == 0 {
 			return boardEngine{}, false, nil
 		}
-		m, err := vectorscan.Compile(patterns)
+		m, err := vectorscan.Compile(patterns, exact)
 		if err != nil {
 			return boardEngine{}, true, err
 		}
@@ -217,13 +228,14 @@ func boardEntrant(name string, patterns []string, asciiTier bool) (boardEngine, 
 		if !stringZillaAvailable {
 			return boardEngine{}, false, nil
 		}
-		m, err := stringzilla.CompileAlternation(patterns)
+		m, err := stringzilla.CompileAlternation(patterns, exact)
 		if err != nil {
 			return boardEngine{}, true, err
 		}
 		return boardEngine{find: m.Find, each: m.Each}, true, nil
 	case "veloz":
-		if !asciiTier || !single || velozVectorBits() != 256 {
+		// veloz has no exact substring search.
+		if exact || !asciiTier || !single || velozVectorBits() != 256 {
 			return boardEngine{}, false, nil
 		}
 		// veloz has no iterator, so Each restarts IndexFold after each match.
@@ -247,10 +259,12 @@ func boardEntrant(name string, patterns []string, asciiTier bool) (boardEngine, 
 			}
 		}}, true, nil
 	case "rustac":
-		if !asciiTier {
+		// ASCII case insensitivity is exact on the ASCII tier only; exact
+		// matching compares bytes on every tier.
+		if !asciiTier && !exact {
 			return boardEngine{}, false, nil
 		}
-		m, err := rustac.CompileAlternation(patterns)
+		m, err := rustac.CompileAlternation(patterns, exact)
 		if err != nil {
 			return boardEngine{}, true, err
 		}
@@ -299,7 +313,7 @@ func boardHost() string {
 func TestBoardEntrantsAgree(t *testing.T) {
 	pinned := board.Pinned()
 	for _, spec := range board.Cells() {
-		if spec.Sensitive || spec.Size > 256<<10 {
+		if spec.Size > 256<<10 {
 			continue
 		}
 		if _, err := prepareBoardCell(spec, pinned[spec.Name()][1]); err != nil {
@@ -318,7 +332,7 @@ func TestBoardHazardMatesAgree(t *testing.T) {
 			continue // nothing to plant, or r is itself never planted
 		}
 		for _, name := range boardEntrants {
-			e, supported, err := boardEntrant(name, []string{string(r)}, false)
+			e, supported, err := boardEntrant(name, []string{string(r)}, false, false)
 			if err != nil {
 				t.Fatalf("%s %q: %v", name, r, err)
 			}
@@ -329,6 +343,42 @@ func TestBoardHazardMatesAgree(t *testing.T) {
 				if start, _, _ := e.find("\n" + string(mate) + "\n"); start != 1 {
 					t.Errorf("%s does not fold %q (%U) with %q (%U)", name, r, r, mate, mate)
 				}
+			}
+		}
+	}
+}
+
+// TestBoardExactEntrants holds every entrant's exact mode to case. Each
+// haystack holds a fold variant of a pattern before the pattern itself, so an
+// entrant that still folds answers Find and Each wrongly.
+func TestBoardExactEntrants(t *testing.T) {
+	for _, c := range []struct {
+		patterns []string
+		haystack string
+	}{
+		{[]string{"Ab"}, "ab AB aB Ab ab Ab"},
+		{[]string{"Ab", "cD"}, "cd ab CD cD AB Ab"},
+		{[]string{"Жx"}, "жx ЖX Жx жX Жx"},
+		{[]string{"Жx", "ǅb"}, "ǆb ǄB жx ǅb Жx"},
+	} {
+		ascii := !strings.ContainsFunc(c.haystack, func(r rune) bool { return r >= utf8.RuneSelf })
+		want := board.Matches(c.haystack, c.patterns, true)
+		if slices.Equal(want, board.Matches(c.haystack, c.patterns, false)) {
+			t.Fatalf("%q in %q: folding does not change the answer", c.patterns, c.haystack)
+		}
+		for _, name := range boardEntrants {
+			e, supported, err := boardEntrant(name, c.patterns, ascii, true)
+			if err != nil {
+				t.Fatalf("%s %q: %v", name, c.patterns, err)
+			}
+			if !supported {
+				continue
+			}
+			if err := e.bind(name, "find", c.haystack).agree(want[:1]); err != nil {
+				t.Errorf("find %q in %q: %v", c.patterns, c.haystack, err)
+			}
+			if err := e.bind(name, "each", c.haystack).agree(want); err != nil {
+				t.Errorf("each %q in %q: %v", c.patterns, c.haystack, err)
 			}
 		}
 	}

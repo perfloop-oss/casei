@@ -125,13 +125,13 @@ func rngFor(key string, stream uint64) *rand.Rand {
 }
 
 // draw fixes the family's property at its level and draws every other one,
-// redrawing until the cell is coherent: IndexFold searches for one pattern,
-// and a one-byte pattern cannot hold a non-ASCII rune. Case-sensitive cells
-// appear only in the case family: casei exposes NewExactMatcher, but the board
-// does not wire it yet; drawing case mode everywhere would fail every family
-// on that one gap.
+// redrawing until the cell is coherent: IndexFold searches for one pattern and
+// folds by contract, so a case-sensitive cell never draws it, and a one-byte
+// pattern cannot hold a non-ASCII rune. Case-sensitive cells appear only in
+// the case family; the other families sweep caseless search.
 func draw(familyName string, l level, index int) Spec {
 	s := Spec{Family: familyName, Level: l.label, Index: index}
+	s.Sensitive = familyName == "case" && l.label == "cs"
 	rng := rngFor(s.key(), 0)
 	pick := func(name string) level {
 		if name == familyName {
@@ -151,11 +151,10 @@ func draw(familyName string, l level, index int) Spec {
 		length := pick("length")
 		s.LenLo, s.LenHi = length.lo, length.hi
 		s.NonASCII = pick("script").lo
-		if (s.Op != "indexfold" || s.Count == 1) && (s.NonASCII == 0 || s.LenLo >= 2) {
+		if (s.Op != "indexfold" || s.Count == 1 && !s.Sensitive) && (s.NonASCII == 0 || s.LenLo >= 2) {
 			break
 		}
 	}
-	s.Sensitive = familyName == "case" && l.label == "cs"
 	s.Corpus = pick("corpus").label
 	s.Spacing = pick("density").lo
 	// Only the size family sweeps 64 B to 16 MiB. Other families draw from

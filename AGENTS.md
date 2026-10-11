@@ -145,7 +145,9 @@ the field. Two ways to produce one, both of which have happened here:
 `BenchmarkBoard` times every cell pinned in `arena/board/cells.txt`. Eight
 families each sweep one property -- pattern count, pattern length, script,
 case mode, corpus, match density, haystack size, operation -- and draw the
-rest. `casei` must answer every cell. The board passes on Sapphire Rapids
+rest. `casei` must answer every cell. A case-sensitive cell runs
+`NewExactMatcher` and each entrant's native exact mode (`exact_tier` in
+`arena/field.yaml`) against a raw-byte oracle. The board passes on Sapphire Rapids
 (GenuineIntel family 6 model 143, AVX-512F/BW/VBMI) when every family's mean
 `x_vs_best` is below 1.0 and no cell is above 1.10, with every supporting
 entrant timed:

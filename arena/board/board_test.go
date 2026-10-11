@@ -103,3 +103,13 @@ func TestPinnedBoard(t *testing.T) {
 		t.Fatalf("the generator no longer builds the cells in cells.txt (%v); review, then rerun with -update", err)
 	}
 }
+
+// TestSensitiveCellsSkipIndexFold holds the generator to IndexFold's contract:
+// IndexFold folds, so no case-sensitive cell draws it, at any index.
+func TestSensitiveCellsSkipIndexFold(t *testing.T) {
+	for i := range 1000 {
+		if s := draw("case", level{label: "cs"}, i); !s.Sensitive || s.Op == "indexfold" {
+			t.Fatalf("%s: case-sensitive cell draws %s", s.Name(), s.Op)
+		}
+	}
+}

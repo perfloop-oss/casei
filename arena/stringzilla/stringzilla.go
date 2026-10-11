@@ -1,9 +1,10 @@
 // Package stringzilla provides the arena's StringZilla full-fold baseline with
-// a timed simple-fold verification adapter.
+// a timed simple-fold verification adapter, and its exact substring search.
 package stringzilla
 
 /*
 #cgo pkg-config: stringzilla
+#include <stdbool.h>
 #include <stringzilla/stringzilla.h>
 
 static int casei_stringzilla_has_ice(void) {
@@ -17,12 +18,14 @@ static int casei_stringzilla_prepare(const char *needle, size_t needle_length,
 		needle_length, metadata, &matched_length) != NULL;
 }
 
+// casei_stringzilla_find finds needle with sz_find when exact, and otherwise
+// finds a full-fold candidate with sz_utf8_uncased_search.
 static int casei_stringzilla_find(const char *haystack, size_t haystack_length,
-		const char *needle, size_t needle_length,
+		const char *needle, size_t needle_length, bool exact,
 		sz_utf8_uncased_needle_metadata_t *metadata, size_t *offset) {
 	sz_size_t matched_length = 0;
-	sz_cptr_t found = sz_utf8_uncased_search(haystack, haystack_length,
-		needle, needle_length, metadata, &matched_length);
+	sz_cptr_t found = exact ? sz_find(haystack, haystack_length, needle, needle_length) :
+		sz_utf8_uncased_search(haystack, haystack_length, needle, needle_length, metadata, &matched_length);
 	if (found == NULL) {
 		return 0;
 	}
@@ -30,14 +33,14 @@ static int casei_stringzilla_find(const char *haystack, size_t haystack_length,
 	return 1;
 }
 // casei_stringzilla_candidates writes up to cap starts of consecutive
-// full-fold candidates from start into out, in one native call, advancing one
-// rune past each, and returns how many it wrote.
+// candidates (exact matches when exact) from start into out, in one native
+// call, advancing one rune past each, and returns how many it wrote.
 static size_t casei_stringzilla_candidates(const char *haystack, size_t length,
-		size_t start, const char *needle, size_t needle_length,
+		size_t start, const char *needle, size_t needle_length, bool exact,
 		sz_utf8_uncased_needle_metadata_t *metadata, size_t *out, size_t cap) {
 	size_t n = 0, found = 0;
 	while (n < cap && start < length && casei_stringzilla_find(haystack + start,
-			length - start, needle, needle_length, metadata, &found)) {
+			length - start, needle, needle_length, exact, metadata, &found)) {
 		size_t at = start + found;
 		unsigned char lead = (unsigned char)haystack[at];
 		out[n++] = at;
@@ -62,11 +65,19 @@ import (
 // Matcher reuses StringZilla's full-fold needle metadata, then verifies every
 // full-fold hit with Unicode simple folding. The verification is intentionally
 // in Find: it is the adaptation required to make StringZilla comparable to the
-// arena contract, so it is part of the timed baseline.
+// arena contract, so it is part of the timed baseline. An exact Matcher runs
+// StringZilla's exact sz_find, whose hits need no verification.
 type Matcher struct {
 	needle   string
 	runes    int // the needle's runes; a match spans at most utf8.UTFMax bytes each
+	exact    bool
 	metadata C.sz_utf8_uncased_needle_metadata_t
+}
+
+// matchAt reports whether a candidate start is a match: every exact hit is, and
+// a full-fold hit is when it matches under simple folding.
+func (m *Matcher) matchAt(haystack string, start int) bool {
+	return m.exact || simpleFoldMatchAt(haystack, m.needle, start)
 }
 
 // Alternation is a reduction over independently compiled StringZilla needles.
@@ -109,10 +120,11 @@ func VectorBits() int {
 	return 0
 }
 
-// CompileLiteral prepares one valid UTF-8 needle. StringZilla's dynamic
-// library must expose its Ice Lake AVX-512 implementation; using a quiet
-// serial fallback would make a native competitor's timing misleading.
-func CompileLiteral(needle string) (*Matcher, error) {
+// CompileLiteral prepares one valid UTF-8 needle, caseless unless exact.
+// StringZilla's dynamic library must expose its Ice Lake AVX-512
+// implementation; using a quiet serial fallback would make a native
+// competitor's timing misleading.
+func CompileLiteral(needle string, exact bool) (*Matcher, error) {
 	if !utf8.ValidString(needle) {
 		return nil, fmt.Errorf("StringZilla requires a valid UTF-8 needle")
 	}
@@ -120,8 +132,8 @@ func CompileLiteral(needle string) (*Matcher, error) {
 		return nil, fmt.Errorf("StringZilla Ice Lake AVX-512 path is unavailable")
 	}
 
-	m := &Matcher{needle: needle, runes: utf8.RuneCountInString(needle)}
-	if C.casei_stringzilla_prepare(pointer(needle), C.size_t(len(needle)), &m.metadata) == 0 {
+	m := &Matcher{needle: needle, runes: utf8.RuneCountInString(needle), exact: exact}
+	if !exact && C.casei_stringzilla_prepare(pointer(needle), C.size_t(len(needle)), &m.metadata) == 0 {
 		runtime.KeepAlive(needle)
 		return nil, fmt.Errorf("StringZilla failed to prepare needle metadata")
 	}
@@ -130,10 +142,10 @@ func CompileLiteral(needle string) (*Matcher, error) {
 }
 
 // CompileAlternation prepares each literal once, outside timed searches.
-func CompileAlternation(patterns []string) (*Alternation, error) {
+func CompileAlternation(patterns []string, exact bool) (*Alternation, error) {
 	alternation := &Alternation{matchers: make([]*Matcher, len(patterns))}
 	for i, pattern := range patterns {
-		m, err := CompileLiteral(pattern)
+		m, err := CompileLiteral(pattern, exact)
 		if err != nil {
 			return nil, err
 		}
@@ -156,9 +168,9 @@ func pointerAt(s string, offset int) *C.char {
 	return (*C.char)(unsafe.Add(unsafe.Pointer(unsafe.StringData(s)), offset))
 }
 
-// Index returns the first simple-fold match. Full folding is a conservative
-// candidate generator: it may report an expansion such as ß for "ss", which
-// simpleFoldMatchAt rejects before the scan resumes at the next source rune.
+// Index returns the first match, exact or under simple folding. Full folding is
+// a conservative candidate generator: it may report an expansion such as ß for
+// "ss", which matchAt rejects before the scan resumes at the next source rune.
 //
 // StringZilla requires valid UTF-8. The arena's count helper begins each next
 // overlap probe one byte after the previous start, which can leave a slice at a
@@ -183,7 +195,7 @@ func (m *Matcher) Index(haystack string) int {
 		var found C.size_t
 		if C.casei_stringzilla_find(
 			pointerAt(haystack, offset), C.size_t(len(haystack)-offset),
-			pointer(m.needle), C.size_t(len(m.needle)), &metadata, &found,
+			pointer(m.needle), C.size_t(len(m.needle)), C.bool(m.exact), &metadata, &found,
 		) == 0 {
 			runtime.KeepAlive(haystack)
 			runtime.KeepAlive(m.needle)
@@ -192,7 +204,7 @@ func (m *Matcher) Index(haystack string) int {
 		runtime.KeepAlive(haystack)
 		runtime.KeepAlive(m.needle)
 		candidate := offset + int(found)
-		if simpleFoldMatchAt(haystack, m.needle, candidate) {
+		if m.matchAt(haystack, candidate) {
 			return base + candidate
 		}
 		if candidate == len(haystack) {
@@ -294,7 +306,7 @@ func (a *Alternation) Each(haystack string, yield func(start, pattern, width int
 		st, m := &(*streams)[i], a.matchers[i]
 		for st.match = -1; ; {
 			for ; st.i < st.n; st.i++ {
-				if c := int(st.at[st.i]); c >= at && simpleFoldMatchAt(haystack, m.needle, c) {
+				if c := int(st.at[st.i]); c >= at && m.matchAt(haystack, c) {
 					st.match = c
 					return
 				}
@@ -304,7 +316,7 @@ func (a *Alternation) Each(haystack string, yield func(start, pattern, width int
 			}
 			metadata := m.metadata
 			st.n = int(C.casei_stringzilla_candidates(pointer(haystack), C.size_t(len(haystack)),
-				C.size_t(max(at, st.from)), pointer(m.needle), C.size_t(len(m.needle)), &metadata, &st.at[0], eachBatch))
+				C.size_t(max(at, st.from)), pointer(m.needle), C.size_t(len(m.needle)), C.bool(m.exact), &metadata, &st.at[0], eachBatch))
 			runtime.KeepAlive(haystack)
 			runtime.KeepAlive(m.needle)
 			st.i, st.from = 0, -1

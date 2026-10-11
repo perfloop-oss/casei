@@ -14,7 +14,7 @@ import (
 type rustACMatcher = rustac.Matcher
 
 func newRustACAlternation(patterns []string) (*rustACMatcher, error) {
-	return rustac.CompileAlternation(patterns)
+	return rustac.CompileAlternation(patterns, false)
 }
 
 var rustACAlts = func() []*rustACMatcher {
@@ -39,7 +39,7 @@ var rustACSingles = func() map[string]*rustACMatcher {
 	out := make(map[string]*rustACMatcher)
 	for _, s := range singleScenarios {
 		if _, ok := out[s.needle]; !ok && !s.utf8 {
-			m, err := rustac.Compile([]string{s.needle})
+			m, err := rustac.Compile([]string{s.needle}, false)
 			if err != nil {
 				panic(fmt.Sprintf("Rust Aho-Corasick baseline unavailable for %q: %v", s.needle, err))
 			}

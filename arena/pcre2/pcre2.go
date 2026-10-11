@@ -5,14 +5,16 @@ package pcre2
 #cgo pkg-config: libpcre2-8
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include <pcre2.h>
+#include <stdbool.h>
 #include <stddef.h>
 
+// casei_pcre2_compile_8 compiles in UTF mode, caseless unless exact.
 static pcre2_code_8 *casei_pcre2_compile_8(const char *pattern, size_t length,
-	int *error_code, size_t *error_offset) {
+	bool exact, int *error_code, size_t *error_offset) {
 	PCRE2_SIZE offset = 0;
 	pcre2_code_8 *code = pcre2_compile_8(
 		(PCRE2_SPTR8)pattern, (PCRE2_SIZE)length,
-		PCRE2_CASELESS | PCRE2_UTF, error_code, &offset, NULL);
+		exact ? PCRE2_UTF : PCRE2_CASELESS | PCRE2_UTF, error_code, &offset, NULL);
 	*error_offset = (size_t)offset;
 	return code;
 }
@@ -78,8 +80,9 @@ import (
 	"unsafe"
 )
 
-// Regex is a PCRE2_UTF|PCRE2_CASELESS pattern whose PCRE2 JIT compilation
-// succeeded. Match data is pooled because PCRE2 writes its ovector per match.
+// Regex is a PCRE2_UTF pattern, PCRE2_CASELESS unless compiled exact, whose
+// PCRE2 JIT compilation succeeded. Match data is pooled because PCRE2 writes
+// its ovector per match.
 type Regex struct {
 	code    *C.pcre2_code_8
 	pattern int       // the pattern ID Find and Each report: 0, or -1 for an alternation
@@ -109,13 +112,14 @@ func pointer(s string) *C.char {
 	return (*C.char)(unsafe.Pointer(unsafe.StringData(s)))
 }
 
-// Compile builds and JIT-compiles pattern. It returns an error instead of
-// falling back to interpreted PCRE2.
-func Compile(pattern string) (*Regex, error) {
+// Compile builds and JIT-compiles pattern. exact drops PCRE2_CASELESS,
+// PCRE2's case-sensitive mode. It returns an error instead of falling back to
+// interpreted PCRE2.
+func Compile(pattern string, exact bool) (*Regex, error) {
 	var compileError C.int
 	var errorOffset C.size_t
 	code := C.casei_pcre2_compile_8(
-		pointer(pattern), C.size_t(len(pattern)), &compileError, &errorOffset,
+		pointer(pattern), C.size_t(len(pattern)), C.bool(exact), &compileError, &errorOffset,
 	)
 	runtime.KeepAlive(pattern)
 	if code == nil {
@@ -145,15 +149,16 @@ func QuoteMeta(s string) string {
 	return `\Q` + strings.ReplaceAll(s, `\E`, `\E\\E\Q`) + `\E`
 }
 
-// CompileLiteral compiles one UTF-8 simple-fold literal with PCRE2 JIT.
-func CompileLiteral(pattern string) (*Regex, error) {
-	return Compile(QuoteMeta(pattern))
+// CompileLiteral compiles one UTF-8 literal with PCRE2 JIT, caseless unless
+// exact.
+func CompileLiteral(pattern string, exact bool) (*Regex, error) {
+	return Compile(QuoteMeta(pattern), exact)
 }
 
-// CompileAlternation compiles patterns as one ordered alternation. It has no
-// capture groups, which would slow PCRE2's search, so
+// CompileAlternation compiles patterns as one ordered alternation, caseless
+// unless exact. It has no capture groups, which would slow PCRE2's search, so
 // Find and Each report pattern ID -1, as Go's regexp does.
-func CompileAlternation(patterns []string) (*Regex, error) {
+func CompileAlternation(patterns []string, exact bool) (*Regex, error) {
 	branches := make([]string, len(patterns))
 	for i, pattern := range patterns {
 		branches[i] = QuoteMeta(pattern)
@@ -162,7 +167,7 @@ func CompileAlternation(patterns []string) (*Regex, error) {
 	if len(patterns) == 0 {
 		expression = `(?!)`
 	}
-	re, err := Compile(expression)
+	re, err := Compile(expression, exact)
 	if err != nil {
 		return nil, err
 	}

@@ -10,13 +10,13 @@ import (
 type pcre2Regex = pcre2jit.Regex
 
 func newPCRE2Regex(pattern string) (*pcre2Regex, error) {
-	return pcre2jit.Compile(pattern)
+	return pcre2jit.Compile(pattern, false)
 }
 
 func pcre2QuoteMeta(s string) string { return pcre2jit.QuoteMeta(s) }
 
 func newPCRE2Alternation(patterns []string) (*pcre2Regex, error) {
-	return pcre2jit.CompileAlternation(patterns)
+	return pcre2jit.CompileAlternation(patterns, false)
 }
 
 func mustPCRE2Regex(pattern string) *pcre2Regex {

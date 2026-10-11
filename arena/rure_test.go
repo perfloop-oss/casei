@@ -13,11 +13,11 @@ import (
 type rureRegex = rure.Regex
 
 func newRureLiteral(pattern string) (*rureRegex, error) {
-	return rure.CompileLiteral(pattern)
+	return rure.CompileLiteral(pattern, false)
 }
 
 func newRureAlternation(patterns []string) (*rureRegex, error) {
-	return rure.CompileAlternation(patterns)
+	return rure.CompileAlternation(patterns, false)
 }
 
 func mustRureLiteral(pattern string) *rureRegex {

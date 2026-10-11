@@ -76,7 +76,8 @@ func (re *Regex) VectorBits() int {
 }
 
 // Compile builds pattern with Unicode mode enabled. Callers add (?i) to select
-// rust-regex's Unicode simple-case-fold behavior. Errors are returned rather than replaced by an interpreted or scalar
+// rust-regex's Unicode simple-case-fold behavior; without it matching is
+// exact. Errors are returned rather than replaced by an interpreted or scalar
 // baseline.
 func Compile(pattern string) (*Regex, error) {
 	error := C.rure_error_new()
@@ -98,16 +99,25 @@ func Compile(pattern string) (*Regex, error) {
 	return &Regex{re: re}, nil
 }
 
-// CompileLiteral builds a case-insensitive Unicode literal.
-func CompileLiteral(pattern string) (*Regex, error) {
-	return Compile("(?i)" + QuoteMeta(pattern))
+// caseFlag is the expression prefix for a case mode: (?i) folds, and exact
+// matching is rust-regex's default, case-sensitive mode.
+func caseFlag(exact bool) string {
+	if exact {
+		return ""
+	}
+	return "(?i)"
 }
 
-// CompileAlternation builds an ordered case-insensitive literal alternation.
-// rust-regex's leftmost-first semantics choose the same match
+// CompileLiteral builds a Unicode literal, case-insensitive unless exact.
+func CompileLiteral(pattern string, exact bool) (*Regex, error) {
+	return Compile(caseFlag(exact) + QuoteMeta(pattern))
+}
+
+// CompileAlternation builds an ordered literal alternation, case-insensitive
+// unless exact. rust-regex's leftmost-first semantics choose the same match
 // as the arena's lowest-pattern-index tie rule; Find and Each report its
 // pattern ID as -1.
-func CompileAlternation(patterns []string) (*Regex, error) {
+func CompileAlternation(patterns []string, exact bool) (*Regex, error) {
 	if len(patterns) == 0 {
 		return &Regex{pattern: -1}, nil
 	}
@@ -115,7 +125,7 @@ func CompileAlternation(patterns []string) (*Regex, error) {
 	for i, pattern := range patterns {
 		branches[i] = QuoteMeta(pattern)
 	}
-	re, err := Compile("(?i)(?:" + strings.Join(branches, "|") + ")")
+	re, err := Compile(caseFlag(exact) + "(?:" + strings.Join(branches, "|") + ")")
 	if err != nil {
 		return nil, err
 	}

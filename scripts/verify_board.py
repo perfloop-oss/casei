@@ -6,8 +6,10 @@
 - It measured exactly the cells pinned in arena/board/cells.txt, or with
   --family, exactly that family's cells, for iterating on one family; the
   full board is the acceptance check.
-- casei answers every cell, and every pinned entrant that supports a cell was
-  timed. (BenchmarkBoard fails a cell outright on any wrong answer.)
+- casei answers every cell, case-sensitive cells included, and every pinned
+  entrant that supports a cell was timed: on a case-sensitive cell, every
+  entrant with an exact mode. (BenchmarkBoard fails a cell outright on any
+  wrong answer, so a wrong answer leaves its cell out of the run.)
 - A cell's x_vs_best is its largest entrant ratio, casei's time over that of
   the fastest entrant; no cell is above 1.10.
 - Every family's aggregate x_vs_best is below 1.0. Cells weigh equally, so the
@@ -71,8 +73,11 @@ def parse(path):
 
 
 def supported(name, tier):
-    """Return the entrants that support a cell, from field.yaml's tiers."""
+    """Return the entrants that support a cell, from field.yaml's tiers and,
+    on a case-sensitive cell, its exact_tier."""
     out = {"regexp", "pcre2", "rure", "vectorscan", "stringzilla"}
+    if name.endswith(",case=cs"):
+        return out | {"rustac"}
     if tier == "ascii":
         out.add("rustac")
         if "/n=1," in name:
