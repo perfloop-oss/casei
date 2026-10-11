@@ -20,11 +20,11 @@ type stringZillaAlternation = stringzilla.Alternation
 var stringZillaAvailable = stringzilla.Enabled()
 
 func newStringZillaLiteral(pattern string) (*stringZillaLiteral, error) {
-	return stringzilla.CompileLiteral(pattern)
+	return stringzilla.CompileLiteral(pattern, false)
 }
 
 func newStringZillaAlternation(patterns []string) (*stringZillaAlternation, error) {
-	return stringzilla.CompileAlternation(patterns)
+	return stringzilla.CompileAlternation(patterns, false)
 }
 
 func mustStringZillaLiteral(pattern string) *stringZillaLiteral {
@@ -180,7 +180,7 @@ func TestStringZillaEachAgrees(t *testing.T) {
 		for i := range patterns {
 			patterns[i] = random(1 + rng.IntN(3))
 		}
-		m, err := stringzilla.CompileAlternation(patterns)
+		m, err := stringzilla.CompileAlternation(patterns, false)
 		if err != nil {
 			t.Fatal(err)
 		}

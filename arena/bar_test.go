@@ -208,7 +208,7 @@ func BenchmarkBar(b *testing.B) {
 			m := casei.NewMatcher(s.patterns)
 			candidate := func() { _, matcherFound = m.Find(s.haystack) }
 
-			re := regexpAltFor(s.patterns)
+			re := regexpAltFor(s.patterns, false)
 			best := pairedRatio(candidate, func() { matcherSink = len(re.FindStringIndex(s.haystack)) })
 			competitors := 1
 			pcre := pcre2Alts[scenarioIndex]

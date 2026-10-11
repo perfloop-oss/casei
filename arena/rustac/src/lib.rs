@@ -39,6 +39,7 @@ pub extern "C" fn casei_ac_compile(
     patterns: *const *const u8,
     lengths: *const usize,
     count: usize,
+    exact: bool,
     error: *mut *mut c_char,
 ) -> *mut Matcher {
     if !error.is_null() {
@@ -60,7 +61,9 @@ pub extern "C" fn casei_ac_compile(
                 return ptr::null_mut();
             }
         };
-        if !bytes.is_ascii() {
+        // ASCII case insensitivity folds ASCII only, so a caseless matcher is
+        // exact on ASCII patterns only. Exact matching takes any bytes.
+        if !exact && !bytes.is_ascii() {
             set_error(error, "Rust Aho-Corasick entrant is ASCII-only");
             return ptr::null_mut();
         }
@@ -76,7 +79,7 @@ pub extern "C" fn casei_ac_compile(
         None
     } else {
         match AhoCorasickBuilder::new()
-            .ascii_case_insensitive(true)
+            .ascii_case_insensitive(!exact)
             .match_kind(MatchKind::LeftmostFirst)
             .kind(Some(AhoCorasickKind::DFA))
             .prefilter(true)

@@ -44,10 +44,10 @@ func NewMatcher(patterns []string) *Matcher {
 // equality. Matching is case-sensitive and may start or end at any byte offset,
 // including within a valid UTF-8 encoding. Find returns the earliest byte start,
 // with ties resolved by the lowest pattern index. Each consumes the matched
-// pattern's byte length. An empty pattern is a zero-width match at offset 0 and
-// EOF, subject to the usual leftmost and lowest-index rules. Each advances one
-// byte after an empty result. The set is copied, so later mutation does not
-// affect the exposed patterns or compiled plan.
+// pattern's byte length. An empty pattern matches with zero width at every byte
+// offset, including EOF; Find reports offset 0, subject to the lowest-index
+// rule. Each advances one byte after an empty result. The set is copied, so
+// later mutation does not affect the exposed patterns or compiled plan.
 func NewExactMatcher(patterns []string) *Matcher {
 	p := make([]string, len(patterns))
 	copy(p, patterns)

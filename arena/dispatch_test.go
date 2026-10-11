@@ -63,7 +63,7 @@ func TestFieldDispatchWidths(t *testing.T) {
 		if got := stringzilla.VectorBits(); got != 0 {
 			t.Errorf("excluded StringZilla dispatch = %d, want 0", got)
 		}
-		if _, err := stringzilla.CompileLiteral("literal"); err == nil {
+		if _, err := stringzilla.CompileLiteral("literal", false); err == nil {
 			t.Error("excluded StringZilla quietly accepted a scalar fallback")
 		}
 	}

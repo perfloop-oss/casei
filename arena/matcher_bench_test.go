@@ -187,12 +187,18 @@ func perPatternFind(haystack string, matchers []*casei.Matcher) (casei.Match, bo
 	return best, true
 }
 
-func regexpAltFor(patterns []string) *regexp.Regexp {
+// regexpAltFor compiles patterns as an ordered alternation, with (?i) unless
+// exact: Go regexp is case-sensitive by default.
+func regexpAltFor(patterns []string, exact bool) *regexp.Regexp {
 	quoted := make([]string, len(patterns))
 	for i, p := range patterns {
 		quoted[i] = regexp.QuoteMeta(p)
 	}
-	return regexp.MustCompile(`(?i)(?:` + strings.Join(quoted, "|") + `)`)
+	flag := `(?i)`
+	if exact {
+		flag = ""
+	}
+	return regexp.MustCompile(flag + `(?:` + strings.Join(quoted, "|") + `)`)
 }
 
 func acBuild(patterns []string, caseInsensitive bool) ac.AhoCorasick {
@@ -239,7 +245,7 @@ func TestMultiBaselinesAgree(t *testing.T) {
 		if gotOK != wantOK || (gotOK && got != want) {
 			t.Errorf("%s/per-pattern: %+v,%v want %+v,%v", s.name, got, gotOK, want, wantOK)
 		}
-		re := regexpAltFor(s.patterns)
+		re := regexpAltFor(s.patterns, false)
 		reStart := -1
 		if loc := re.FindStringIndex(s.haystack); loc != nil {
 			reStart = loc[0]
@@ -306,7 +312,7 @@ func BenchmarkMatcher(b *testing.B) {
 				_, matcherFound = perPatternFind(s.haystack, singles)
 			}
 		})
-		re := regexpAltFor(s.patterns)
+		re := regexpAltFor(s.patterns, false)
 		b.Run(s.name+"/regexpAlt", func(b *testing.B) {
 			b.SetBytes(int64(len(s.haystack)))
 			for b.Loop() {

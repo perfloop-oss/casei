@@ -4,6 +4,7 @@ package vectorscan
 /*
 #cgo pkg-config: libhs
 #include <hs.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,16 +27,18 @@ static char *casei_hs_copy_message(const char *message) {
 	return copy;
 }
 
+// casei_hs_compile compiles UTF-8 leftmost-start literals, caseless unless
+// exact.
 static hs_database_t *casei_hs_compile(char *const *expressions,
 		const unsigned int *ids, unsigned int count, unsigned int vector_bits,
-		char **message) {
+		bool exact, char **message) {
 	unsigned int *flags = (unsigned int *)malloc((size_t)count * sizeof(*flags));
 	if (flags == NULL) {
 		*message = casei_hs_copy_message("Vectorscan flag allocation failed");
 		return NULL;
 	}
 	for (unsigned int i = 0; i < count; i++) {
-		flags[i] = HS_FLAG_CASELESS | HS_FLAG_UTF8 | HS_FLAG_SOM_LEFTMOST;
+		flags[i] = (exact ? 0 : HS_FLAG_CASELESS) | HS_FLAG_UTF8 | HS_FLAG_SOM_LEFTMOST;
 	}
 
 	hs_platform_info_t platform;
@@ -186,9 +189,10 @@ import (
 	"golang.org/x/sys/cpu"
 )
 
-// Matcher is a Vectorscan block-mode database compiled with Unicode caseless
-// literal patterns. Its scratch space is pooled because Vectorscan requires a
-// distinct scratch allocation for concurrent scans.
+// Matcher is a Vectorscan block-mode database compiled with UTF-8 literal
+// patterns, caseless unless compiled exact. Its scratch space is pooled
+// because Vectorscan requires a distinct scratch allocation for concurrent
+// scans.
 type Matcher struct {
 	database   *C.hs_database_t
 	scratch    sync.Pool // *scratch
@@ -240,8 +244,9 @@ func (m *Matcher) HasVBMI() bool {
 // Compile builds one Vectorscan database for patterns. Compilation is
 // deliberately separate from Find so the arena times only the search and its
 // leftmost/lowest-pattern adapter. An unavailable compiler is returned as an
-// error rather than replaced by a weaker matcher.
-func Compile(patterns []string) (*Matcher, error) {
+// error rather than replaced by a weaker matcher. exact drops
+// HS_FLAG_CASELESS, Vectorscan's case-sensitive mode.
+func Compile(patterns []string, exact bool) (*Matcher, error) {
 	m := &Matcher{empty: -1}
 	for i, pattern := range patterns {
 		if pattern == "" && (m.empty < 0 || i < m.empty) {
@@ -295,7 +300,7 @@ func Compile(patterns []string) (*Matcher, error) {
 
 	var message *C.char
 	database := C.casei_hs_compile(
-		(**C.char)(expressions), (*C.uint)(ids), C.uint(count), C.uint(requested), &message,
+		(**C.char)(expressions), (*C.uint)(ids), C.uint(count), C.uint(requested), C.bool(exact), &message,
 	)
 	if database == nil {
 		if message == nil {
@@ -351,13 +356,13 @@ func Compile(patterns []string) (*Matcher, error) {
 }
 
 // CompileLiteral builds a one-pattern database.
-func CompileLiteral(pattern string) (*Matcher, error) {
-	return Compile([]string{pattern})
+func CompileLiteral(pattern string, exact bool) (*Matcher, error) {
+	return Compile([]string{pattern}, exact)
 }
 
 // CompileAlternation builds a literal set in its supplied pattern order.
-func CompileAlternation(patterns []string) (*Matcher, error) {
-	return Compile(patterns)
+func CompileAlternation(patterns []string, exact bool) (*Matcher, error) {
+	return Compile(patterns, exact)
 }
 
 // QuoteMeta quotes s as one Vectorscan literal. Vectorscan accepts PCRE-style
@@ -445,8 +450,9 @@ func (m *Matcher) Index(haystack string) int {
 // leftmost start first, ties to the lowest pattern index, the next match
 // starting at or after the previous match's end. Vectorscan reports every
 // match in no guaranteed order, so a reduction cannot stream: one scan collects
-// all reports and the adapter sorts and reduces them. Both are part of the timed baseline. Each
-// returns false when yield stops it. Empty patterns are outside its contract.
+// all reports and the adapter sorts and reduces them. Both are part of the
+// timed baseline. Each returns false when yield stops it. Empty patterns are
+// outside its contract.
 func (m *Matcher) Each(haystack string, yield func(start, pattern, width int) bool) bool {
 	if m == nil || m.database == nil {
 		return true

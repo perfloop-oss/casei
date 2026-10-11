@@ -3,13 +3,14 @@ package rustac
 
 /*
 #cgo pkg-config: casei-rustac
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 
 typedef struct casei_ac_matcher casei_ac_matcher;
 casei_ac_matcher *casei_ac_compile(const uint8_t *const *patterns,
-    const size_t *lengths, size_t count, char **error);
+    const size_t *lengths, size_t count, bool exact, char **error);
 void casei_ac_free(casei_ac_matcher *matcher);
 void casei_ac_error_free(char *error);
 int casei_ac_find(const casei_ac_matcher *matcher, const uint8_t *haystack,
@@ -27,9 +28,11 @@ import (
 	"unsafe"
 )
 
-// Matcher owns a Rust aho-corasick DFA. It is deliberately ASCII-only because
-// the arena uses it on its exact ASCII tier. Its enabled prefilter is audited
-// for each query instead of being labeled from Go's CPU feature flags.
+// Matcher owns a Rust aho-corasick DFA. A caseless matcher is deliberately
+// ASCII-only because its folding is ASCII folding, exact on the ASCII tier
+// only; an exact matcher compares bytes, so it takes any pattern. Its enabled
+// prefilter is audited for each query instead of being labeled from Go's CPU
+// feature flags.
 type Matcher struct {
 	ptr          *C.casei_ac_matcher
 	dispatchBits atomic.Int32
@@ -51,9 +54,10 @@ func (m *Matcher) recordDispatch(bits C.uint32_t) {
 	m.dispatchBits.Store(int32(bits))
 }
 
-// Compile builds a case-insensitive, LeftmostFirst DFA from ASCII patterns.
+// Compile builds a LeftmostFirst DFA: ASCII case-insensitive over ASCII
+// patterns, or with exact, aho-corasick's byte-exact default over any patterns.
 // Construction is outside Find so the benchmark measures only native search.
-func Compile(patterns []string) (*Matcher, error) {
+func Compile(patterns []string, exact bool) (*Matcher, error) {
 	count := len(patterns)
 	var pointers []*C.uint8_t
 	var lengths []C.size_t
@@ -68,7 +72,7 @@ func Compile(patterns []string) (*Matcher, error) {
 		for i, pattern := range patterns {
 			bytes := []byte(pattern)
 			for _, b := range bytes {
-				if b >= 0x80 {
+				if b >= 0x80 && !exact {
 					return nil, fmt.Errorf("Rust Aho-Corasick entrant is ASCII-only")
 				}
 			}
@@ -80,11 +84,11 @@ func Compile(patterns []string) (*Matcher, error) {
 	var errorText *C.char
 	var raw *C.casei_ac_matcher
 	if count == 0 {
-		raw = C.casei_ac_compile(nil, nil, 0, &errorText)
+		raw = C.casei_ac_compile(nil, nil, 0, C.bool(exact), &errorText)
 	} else {
 		raw = C.casei_ac_compile(
 			(**C.uint8_t)(unsafe.Pointer(&pointers[0])),
-			(*C.size_t)(unsafe.Pointer(&lengths[0])), C.size_t(count), &errorText,
+			(*C.size_t)(unsafe.Pointer(&lengths[0])), C.size_t(count), C.bool(exact), &errorText,
 		)
 	}
 	if raw == nil {
@@ -98,8 +102,8 @@ func Compile(patterns []string) (*Matcher, error) {
 }
 
 // CompileAlternation builds a matcher in the supplied pattern order.
-func CompileAlternation(patterns []string) (*Matcher, error) {
-	return Compile(patterns)
+func CompileAlternation(patterns []string, exact bool) (*Matcher, error) {
+	return Compile(patterns, exact)
 }
 
 func pointer(s string) *C.uint8_t {

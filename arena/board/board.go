@@ -126,12 +126,12 @@ func rngFor(key string, stream uint64) *rand.Rand {
 
 // draw fixes the family's property at its level and draws every other one,
 // redrawing until the cell is coherent: IndexFold searches for one pattern,
-// and a one-byte pattern cannot hold a non-ASCII rune. Case-sensitive cells
-// appear only in the case family: casei exposes NewExactMatcher, but the board
-// does not wire it yet; drawing case mode everywhere would fail every family
-// on that one gap.
+// and a one-byte pattern cannot hold a non-ASCII rune. IndexFold also folds by
+// contract: the case family's cs level redraws the operation, and an IndexFold
+// cell of any other family is case-insensitive.
 func draw(familyName string, l level, index int) Spec {
 	s := Spec{Family: familyName, Level: l.label, Index: index}
+	sensitiveLevel := familyName == "case" && l.label == "cs"
 	rng := rngFor(s.key(), 0)
 	pick := func(name string) level {
 		if name == familyName {
@@ -151,11 +151,10 @@ func draw(familyName string, l level, index int) Spec {
 		length := pick("length")
 		s.LenLo, s.LenHi = length.lo, length.hi
 		s.NonASCII = pick("script").lo
-		if (s.Op != "indexfold" || s.Count == 1) && (s.NonASCII == 0 || s.LenLo >= 2) {
+		if (s.Op != "indexfold" || s.Count == 1 && !sensitiveLevel) && (s.NonASCII == 0 || s.LenLo >= 2) {
 			break
 		}
 	}
-	s.Sensitive = familyName == "case" && l.label == "cs"
 	s.Corpus = pick("corpus").label
 	s.Spacing = pick("density").lo
 	// Only the size family sweeps 64 B to 16 MiB. Other families draw from
@@ -168,6 +167,7 @@ func draw(familyName string, l level, index int) Spec {
 	}
 	s.Size = int(math.Round(float64(size.lo) * math.Pow(float64(size.hi)/float64(size.lo), rng.Float64())))
 	s.First = math.Round(rng.Float64()*100) / 100
+	s.Sensitive = pick("case").label == "cs" && s.Op != "indexfold"
 	return s
 }
 
@@ -210,6 +210,8 @@ func (c Cell) Digest() string {
 // they are searched in; a non-ASCII pattern cut from ASCII text gets a rune
 // from the pool. absent keeps them out of the text, so the matches are the
 // planted ones: the first at First, the rest one per Spacing bytes after it.
+// A case-sensitive cell also plants a decoy of each pattern before First, so
+// folding changes its answer.
 func (s Spec) Build() Cell {
 	rng := rngFor(s.key(), 1)
 	text := s.Corpus
@@ -225,7 +227,14 @@ func (s Spec) Build() Cell {
 			source = s.Corpus
 		}
 		src, n := corpus(rng, source, 64<<10), s.LenLo+rng.IntN(s.LenHi-s.LenLo+1)
-		cuts[i], lengths[i] = func() string { return samplePattern(rng, src, n, nonASCII) }, n
+		cuts[i], lengths[i] = func() string {
+			p := samplePattern(rng, src, n, nonASCII)
+			// A case-sensitive cell's pattern needs a cased rune for its decoy.
+			for try := 0; s.Sensitive && try < 64 && !strings.ContainsFunc(p, cased); try++ {
+				p = samplePattern(rng, src, n, nonASCII)
+			}
+			return p
+		}, n
 	}
 	planted, total := plants(rng, lengths, s)
 	base := corpus(rng, s.Corpus, max(s.Size-total, 0))
@@ -333,45 +342,126 @@ func plants(rng *rand.Rand, lengths []int, s Spec) ([]int, int) {
 }
 
 // plant inserts a fold variant of each planted pattern into base, the first at
-// First and the rest at random rune boundaries after it.
+// First and the rest at random rune boundaries after it. A case-sensitive cell
+// also gets a decoy of each pattern at a random rune boundary before First and
+// before any natural match, so folding changes its first answer. A decoy that
+// would make an exact match with the text around it is redrawn.
 func plant(rng *rand.Rand, base string, planted []int, patterns []string, s Spec, ascii bool) string {
-	if len(planted) == 0 {
-		return base
+	type insert struct {
+		at   int
+		text string
 	}
+	var inserts []insert
 	first := int(s.First * float64(len(base)))
-	at := []int{first}
-	for range planted[1:] {
-		at = append(at, first+rng.IntN(len(base)-first+1))
+	if len(planted) > 0 {
+		at := []int{first}
+		for range planted[1:] {
+			at = append(at, first+rng.IntN(len(base)-first+1))
+		}
+		slices.Sort(at)
+		for i, pos := range at {
+			inserts = append(inserts, insert{pos, variant(rng, patterns[planted[i]], s, ascii)})
+		}
 	}
-	slices.Sort(at)
+	if s.Sensitive {
+		limit := first
+		for _, p := range patterns {
+			if i := strings.Index(base, p); i >= 0 {
+				limit = min(limit, i)
+			}
+		}
+		// exact reports whether d inserted at at makes a match of some
+		// pattern: one that overlaps d lies within len(p)-1 bytes of it.
+		exact := func(at int, d string) bool {
+			return slices.ContainsFunc(patterns, func(p string) bool {
+				k := len(p) - 1
+				return strings.Contains(base[max(at-k, 0):at]+d+base[at:min(at+k, len(base))], p)
+			})
+		}
+		var decoys []insert
+		for _, p := range patterns {
+			for try := 0; try < 64; try++ {
+				d, ok := decoy(rng, p, ascii)
+				if !ok {
+					break
+				}
+				at := rng.IntN(limit + 1)
+				for at > 0 && at < len(base) && base[at]&0xC0 == 0x80 {
+					at--
+				}
+				if !exact(at, d) {
+					decoys = append(decoys, insert{at, d})
+					break
+				}
+			}
+		}
+		// A decoy goes before a planted match at the same offset.
+		inserts = append(decoys, inserts...)
+		slices.SortStableFunc(inserts, func(a, b insert) int { return a.at - b.at })
+	}
 	var b strings.Builder
 	prev := 0
-	for i, pos := range at {
+	for _, in := range inserts {
+		pos := in.at
 		for pos > prev && pos < len(base) && base[pos]&0xC0 == 0x80 {
 			pos--
 		}
 		b.WriteString(base[prev:pos])
-		b.WriteString(variant(rng, patterns[planted[i]], s, ascii))
+		b.WriteString(in.text)
 		prev = pos
 	}
 	b.WriteString(base[prev:])
 	return b.String()
 }
 
-// variant spells each rune of p as a random member of HazardMates. An ASCII
-// cell keeps only ASCII mates, so the ASCII tier keeps its ASCII-only
-// entrants. Case-sensitive cells plant p.
+// mates returns HazardMates(r), only its ASCII members in an ASCII cell, so
+// the ASCII tier keeps its ASCII-only entrants. r stays first.
+func mates(r rune, ascii bool) []rune {
+	m := HazardMates(r)
+	if ascii {
+		m = slices.DeleteFunc(m, func(x rune) bool { return x >= utf8.RuneSelf })
+	}
+	return m
+}
+
+// cased reports whether r has a fold mate the board may plant.
+func cased(r rune) bool { return len(HazardMates(r)) > 1 }
+
+// decoy spells p as variant does, with one rune that has a mate forced to a
+// different one, so only a folding search matches it. It reports false when
+// no rune of p has a mate.
+func decoy(rng *rand.Rand, p string, ascii bool) (string, bool) {
+	runes := []rune(p)
+	var cased []int
+	for i, r := range runes {
+		if len(mates(r, ascii)) > 1 {
+			cased = append(cased, i)
+		}
+	}
+	if len(cased) == 0 {
+		return "", false
+	}
+	j := cased[rng.IntN(len(cased))]
+	for i, r := range runes {
+		m := mates(r, ascii)
+		if i == j {
+			m = m[1:]
+		}
+		runes[i] = m[rng.IntN(len(m))]
+	}
+	return string(runes), true
+}
+
+// variant spells each rune of p as a random member of its mates.
+// Case-sensitive cells plant p.
 func variant(rng *rand.Rand, p string, s Spec, ascii bool) string {
 	if s.Sensitive {
 		return p
 	}
 	var b strings.Builder
 	for _, r := range p {
-		mates := HazardMates(r)
-		if ascii {
-			mates = slices.DeleteFunc(mates, func(m rune) bool { return m >= utf8.RuneSelf })
-		}
-		b.WriteRune(mates[rng.IntN(len(mates))])
+		m := mates(r, ascii)
+		b.WriteRune(m[rng.IntN(len(m))])
 	}
 	return b.String()
 }
@@ -424,7 +514,8 @@ func absent(rng *rand.Rand, cuts []func() string, text string, sensitive bool) (
 			for text[at]&0xC0 == 0x80 {
 				at--
 			}
-			if r, size := utf8.DecodeRuneInString(text[at:]); size == width {
+			// A case-sensitive cell keeps cased runes, which its decoys need.
+			if r, size := utf8.DecodeRuneInString(text[at:]); size == width && (!sensitive || cased(r)) {
 				return r
 			}
 		}

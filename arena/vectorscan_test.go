@@ -10,11 +10,11 @@ import (
 type vectorscanMatcher = vectorscan.Matcher
 
 func newVectorscanLiteral(pattern string) (*vectorscanMatcher, error) {
-	return vectorscan.CompileLiteral(pattern)
+	return vectorscan.CompileLiteral(pattern, false)
 }
 
 func newVectorscanAlternation(patterns []string) (*vectorscanMatcher, error) {
-	return vectorscan.CompileAlternation(patterns)
+	return vectorscan.CompileAlternation(patterns, false)
 }
 
 func mustVectorscanLiteral(pattern string) *vectorscanMatcher {

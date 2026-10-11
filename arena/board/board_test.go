@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -30,9 +31,10 @@ func TestCorporaArePinned(t *testing.T) {
 var update = flag.Bool("update", false, "rewrite cells.txt from the generator")
 
 // TestPinnedBoard builds every cell, checks it against its spec, bounds how
-// far absent() strays from natural text, and compares the cells with
-// cells.txt. A change to the generator, Seed, or the real text
-// shows up as a diff of cells.txt; regenerate it with -update.
+// far absent() strays from natural text, holds every case-sensitive cell to an
+// answer that folding changes, and compares the cells with cells.txt. A
+// change to the generator, Seed, or the real text shows up as a diff of
+// cells.txt; regenerate it with -update.
 func TestPinnedBoard(t *testing.T) {
 	var pinned strings.Builder
 	fmt.Fprintf(&pinned, "# BenchmarkBoard cells: name, tier, and sha256 of patterns and haystack.\n")
@@ -65,6 +67,17 @@ func TestPinnedBoard(t *testing.T) {
 		hits := Matches(c.Haystack, c.Patterns, s.Sensitive)
 		if c.Natural == 0 && (len(hits) == 0) != (s.Spacing == 0) {
 			t.Errorf("%s: %d matches with spacing %d", s.Name(), len(hits), s.Spacing)
+		}
+		if s.Sensitive {
+			answer := func(h []Hit) []Hit {
+				if s.Op != "each" && len(h) > 1 {
+					return h[:1]
+				}
+				return h
+			}
+			if slices.Equal(answer(hits), answer(Matches(c.Haystack, c.Patterns, false))) {
+				t.Errorf("%s: folding does not change the answer", s.Name())
+			}
 		}
 		// Patterns keep the text's runes: a multi-rune pattern cut from the
 		// cell's own corpus has each ASCII rune elsewhere in the haystack.
@@ -101,5 +114,22 @@ func TestPinnedBoard(t *testing.T) {
 	}
 	if want, err := os.ReadFile("cells.txt"); err != nil || string(want) != pinned.String() {
 		t.Fatalf("the generator no longer builds the cells in cells.txt (%v); review, then rerun with -update", err)
+	}
+}
+
+// TestSensitiveCellsSkipIndexFold holds the generator to IndexFold's contract
+// in every family and level, at any index: IndexFold folds, so no
+// case-sensitive cell draws it, and the case family's cs level stays
+// case-sensitive.
+func TestSensitiveCellsSkipIndexFold(t *testing.T) {
+	for _, f := range families {
+		for _, l := range f.levels {
+			for i := range 200 {
+				s := draw(f.name, l, i)
+				if s.Sensitive && s.Op == "indexfold" || f.name == "case" && s.Sensitive != (l.label == "cs") {
+					t.Fatalf("%s: case=%v with op %s", s.Name(), s.Sensitive, s.Op)
+				}
+			}
+		}
 	}
 }
