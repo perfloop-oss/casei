@@ -190,8 +190,9 @@ import (
 )
 
 // Matcher is a Vectorscan block-mode database compiled with UTF-8 literal
-// patterns, caseless unless compiled exact. Its scratch space is pooled because Vectorscan requires a
-// distinct scratch allocation for concurrent scans.
+// patterns, caseless unless compiled exact. Its scratch space is pooled
+// because Vectorscan requires a distinct scratch allocation for concurrent
+// scans.
 type Matcher struct {
 	database   *C.hs_database_t
 	scratch    sync.Pool // *scratch
@@ -449,8 +450,9 @@ func (m *Matcher) Index(haystack string) int {
 // leftmost start first, ties to the lowest pattern index, the next match
 // starting at or after the previous match's end. Vectorscan reports every
 // match in no guaranteed order, so a reduction cannot stream: one scan collects
-// all reports and the adapter sorts and reduces them. Both are part of the timed baseline. Each
-// returns false when yield stops it. Empty patterns are outside its contract.
+// all reports and the adapter sorts and reduces them. Both are part of the
+// timed baseline. Each returns false when yield stops it. Empty patterns are
+// outside its contract.
 func (m *Matcher) Each(haystack string, yield func(start, pattern, width int) bool) bool {
 	if m == nil || m.database == nil {
 		return true

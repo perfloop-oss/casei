@@ -135,9 +135,11 @@ func (r boardRun) agree(want []board.Hit) error {
 // so the generator draws no case-sensitive IndexFold cell.
 func boardCandidate(spec board.Spec, cell board.Cell) boardRun {
 	h := cell.Haystack
-	m := casei.NewMatcher(cell.Patterns)
+	var m *casei.Matcher
 	if spec.Sensitive {
 		m = casei.NewExactMatcher(cell.Patterns)
+	} else {
+		m = casei.NewMatcher(cell.Patterns)
 	}
 	switch spec.Op {
 	case "indexfold":

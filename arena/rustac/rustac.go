@@ -30,8 +30,9 @@ import (
 
 // Matcher owns a Rust aho-corasick DFA. A caseless matcher is deliberately
 // ASCII-only because its folding is ASCII folding, exact on the ASCII tier
-// only; an exact matcher compares bytes, so it takes any pattern. Its enabled prefilter is audited
-// for each query instead of being labeled from Go's CPU feature flags.
+// only; an exact matcher compares bytes, so it takes any pattern. Its enabled
+// prefilter is audited for each query instead of being labeled from Go's CPU
+// feature flags.
 type Matcher struct {
 	ptr          *C.casei_ac_matcher
 	dispatchBits atomic.Int32

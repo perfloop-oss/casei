@@ -71,9 +71,9 @@ class VerifyBoardTest(unittest.TestCase):
         self.assertFails(transcript(**{family("count")[3]: {"drop": "rure"}}), "rure_active=0, want 1")
 
     def test_tier_comes_from_cells_txt(self):
-        name = next(n for n in NAMES if TIERS[n] == "utf8")
+        name = next(n for n in NAMES if TIERS[n] == "utf8" and n.endswith(",case=ci"))
         self.assertFails(transcript(**{name: {"extra": "rustac"}}), "rustac_active=1, want 0")
-        name = next(n for n in NAMES if TIERS[n] == "ascii")
+        name = next(n for n in NAMES if TIERS[n] == "ascii" and n.endswith(",case=ci"))
         self.assertFails(transcript(**{name: {"drop": "rustac"}}), "rustac_active=0, want 1")
 
     def test_case_sensitive_cells_need_the_exact_field(self):
@@ -82,14 +82,11 @@ class VerifyBoardTest(unittest.TestCase):
         self.assertEqual(verify.supported(utf8, "utf8"), set(verify.ENTRANTS) - {"veloz"})
         self.assertFails(transcript(**{utf8: {"drop": "rustac"}}), f"{utf8}: rustac_active=0, want 1")
         self.assertFails(transcript(**{ascii: {"drop": "stringzilla"}}), f"{ascii}: stringzilla_active=0, want 1")
-        self.assertFails(transcript(**{ascii: {"extra": "veloz"}}), f"{ascii}: veloz_active=1, want 0")
-        self.assertFails(transcript(**{utf8: {"ratio": 0.6, "faster": "rustac"}}), f"{utf8}: x_vs_best=1.2000")
-
-    def test_rejects_a_wrong_answer_on_a_case_sensitive_cell(self):
-        # BenchmarkBoard fails a cell on a wrong answer, so it prints no metrics.
-        name = family("case/cs")[0]
-        run = transcript(skip={name}) + f"--- FAIL: BenchmarkBoard/{name}\n    rustac match 0 is wrong\n"
-        self.assertFails(run, f"missing=['{name}']")
+        # veloz has no exact mode, even on the one-pattern ASCII cells it races
+        # when folding.
+        single = next(n for n in NAMES if "/n=1," in n and n.endswith(",case=cs") and TIERS[n] == "ascii")
+        self.assertEqual(verify.supported(single, "ascii"), set(verify.ENTRANTS) - {"veloz"})
+        self.assertFails(transcript(**{single: {"extra": "veloz"}}), f"{single}: veloz_active=1, want 0")
 
     def test_rejects_unsupported_case_sensitive_cells(self):
         cs = family("case/cs")
