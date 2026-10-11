@@ -8,11 +8,6 @@ import (
 	"testing"
 )
 
-type exactEachResult struct {
-	match Match
-	width int
-}
-
 func exactRefFind(haystack string, patterns []string) (Match, bool) {
 	best := Match{}
 	found := false
@@ -29,8 +24,8 @@ func exactRefFind(haystack string, patterns []string) (Match, bool) {
 	return best, found
 }
 
-func exactRefEach(haystack string, patterns []string) []exactEachResult {
-	var results []exactEachResult
+func exactRefEach(haystack string, patterns []string) []refEachResult {
+	var results []refEachResult
 	for at := 0; at <= len(haystack); {
 		match, ok := exactRefFind(haystack[at:], patterns)
 		if !ok {
@@ -38,7 +33,7 @@ func exactRefEach(haystack string, patterns []string) []exactEachResult {
 		}
 		match.Start += at
 		width := len(patterns[match.Pattern])
-		results = append(results, exactEachResult{match: match, width: width})
+		results = append(results, refEachResult{match: match, width: width})
 		if width != 0 {
 			at = match.Start + width
 			continue
@@ -51,7 +46,7 @@ func exactRefEach(haystack string, patterns []string) []exactEachResult {
 	return results
 }
 
-func checkExactMatcher(t *testing.T, haystack string, patterns []string) []exactEachResult {
+func checkExactMatcher(t *testing.T, haystack string, patterns []string) []refEachResult {
 	t.Helper()
 	matcher := NewExactMatcher(patterns)
 	want, wantOK := exactRefFind(haystack, patterns)
@@ -61,9 +56,9 @@ func checkExactMatcher(t *testing.T, haystack string, patterns []string) []exact
 	}
 
 	wantEach := exactRefEach(haystack, patterns)
-	var gotEach []exactEachResult
+	var gotEach []refEachResult
 	if !matcher.Each(haystack, func(match Match, width int) bool {
-		gotEach = append(gotEach, exactEachResult{match: match, width: width})
+		gotEach = append(gotEach, refEachResult{match: match, width: width})
 		return true
 	}) {
 		t.Fatal("Each stopped during full enumeration")
@@ -104,7 +99,7 @@ func TestNewExactMatcherOrderingWidthsAndByteFragments(t *testing.T) {
 	}
 
 	got := checkExactMatcher(t, "ababa", []string{"aba", "ba", "a"})
-	want := []exactEachResult{{Match{Pattern: 0, Start: 0}, 3}, {Match{Pattern: 1, Start: 3}, 2}}
+	want := []refEachResult{{Match{Pattern: 0, Start: 0}, 3}, {Match{Pattern: 1, Start: 3}, 2}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("non-overlapping Each = %+v, want %+v", got, want)
 	}
@@ -115,20 +110,20 @@ func TestNewExactMatcherEmptyProgressAndStop(t *testing.T) {
 		name     string
 		haystack string
 		patterns []string
-		want     []exactEachResult
+		want     []refEachResult
 	}{
-		{"empty wins ties and advances by byte", "AK", []string{"", "A"}, []exactEachResult{
+		{"empty wins ties and advances by byte", "AK", []string{"", "A"}, []refEachResult{
 			{Match{Pattern: 0, Start: 0}, 0},
 			{Match{Pattern: 0, Start: 1}, 0},
 			{Match{Pattern: 0, Start: 2}, 0},
 			{Match{Pattern: 0, Start: 3}, 0},
 			{Match{Pattern: 0, Start: 4}, 0},
 		}},
-		{"nonempty lower ID consumes its bytes", "a", []string{"a", ""}, []exactEachResult{
+		{"nonempty lower ID consumes its bytes", "a", []string{"a", ""}, []refEachResult{
 			{Match{Pattern: 0, Start: 0}, 1},
 			{Match{Pattern: 1, Start: 1}, 0},
 		}},
-		{"empty haystack", "", []string{"", ""}, []exactEachResult{
+		{"empty haystack", "", []string{"", ""}, []refEachResult{
 			{Match{Pattern: 0, Start: 0}, 0},
 		}},
 	} {
@@ -200,14 +195,14 @@ func TestNewExactMatcherCopiesPatternsAndAllowsNestedConcurrentReads(t *testing.
 		if nested, ok := matcher.Find("βeta"); !ok || nested != (Match{Pattern: 1, Start: 0}) {
 			t.Fatalf("nested Find = %+v,%t", nested, ok)
 		}
-		var nestedEach []exactEachResult
+		var nestedEach []refEachResult
 		if !matcher.Each("\x84", func(match Match, width int) bool {
-			nestedEach = append(nestedEach, exactEachResult{match: match, width: width})
+			nestedEach = append(nestedEach, refEachResult{match: match, width: width})
 			return true
 		}) {
 			t.Fatal("nested Each stopped")
 		}
-		if want := []exactEachResult{{Match{Pattern: 2, Start: 0}, 1}}; !reflect.DeepEqual(nestedEach, want) {
+		if want := []refEachResult{{Match{Pattern: 2, Start: 0}, 1}}; !reflect.DeepEqual(nestedEach, want) {
 			t.Fatalf("nested Each = %+v, want %+v", nestedEach, want)
 		}
 		return true
@@ -232,15 +227,15 @@ func TestNewExactMatcherCopiesPatternsAndAllowsNestedConcurrentReads(t *testing.
 					errs <- "concurrent Find"
 					return
 				}
-				var gotEach []exactEachResult
+				var gotEach []refEachResult
 				if !matcher.Each("alphaβeta", func(match Match, width int) bool {
-					gotEach = append(gotEach, exactEachResult{match: match, width: width})
+					gotEach = append(gotEach, refEachResult{match: match, width: width})
 					return true
 				}) {
 					errs <- "concurrent Each stopped"
 					return
 				}
-				if want := []exactEachResult{{Match{Pattern: 0, Start: 0}, 5}, {Match{Pattern: 1, Start: 5}, 5}}; !reflect.DeepEqual(gotEach, want) {
+				if want := []refEachResult{{Match{Pattern: 0, Start: 0}, 5}, {Match{Pattern: 1, Start: 5}, 5}}; !reflect.DeepEqual(gotEach, want) {
 					errs <- "concurrent Each result"
 					return
 				}
