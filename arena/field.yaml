@@ -93,9 +93,10 @@ baselines:
     tier: [ascii, utf8]
     semantic_status: exact
     what: PCRE2 JIT with PCRE2_CASELESS|PCRE2_UTF. The arena compiles literals
-          and ordered alternations once, requires JIT, and checks fold hazards,
-          leftmost start, and branch-order ties against its oracle on every
-          valid-UTF-8 row, including ASCII.
+          and ordered alternations once, requires JIT, and checks fold hazards
+          and leftmost start against its oracle on every valid-UTF-8 row,
+          including ASCII. Alternations have no capture groups, which slow
+          PCRE2, so they report no pattern ID, as regexp does.
 
   - name: rure
     tier: [ascii, utf8]
@@ -104,8 +105,10 @@ baselines:
           A checked source patch records the memchr backend reached by each
           query as a diagnostic. The entrant counts on every row whatever
           width it reports, since the audit cannot see its Teddy path (#29,
-          #31). Literals and ordered capture alternations are compiled once
-          and checked against the oracle.
+          #31). Literals and ordered alternations are compiled once and
+          checked against the oracle. Alternations have no capture groups,
+          which turn off rust-regex's literal-set fast path, so they report
+          no pattern ID, as regexp does.
 
   - name: vectorscan
     tier: [ascii, utf8]

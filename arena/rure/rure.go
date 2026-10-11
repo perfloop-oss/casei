@@ -7,13 +7,11 @@ package rure
 #include <stddef.h>
 #include <stdint.h>
 
-// These are private symbols added by the pinned arena audit patch. Keeping
+// This is a private symbol added by the pinned arena audit patch. Keeping
 // reset, search, and readback in one native call preserves thread-local Rust
 // telemetry when cgo moves a Go goroutine between OS threads.
 extern bool rure_casei_find(const rure *re, const uint8_t *haystack,
 	size_t length, size_t start, rure_match *match, uint32_t *dispatch_bits);
-extern bool rure_casei_find_captures(const rure *re, const uint8_t *haystack,
-	size_t length, size_t start, rure_captures *captures, uint32_t *dispatch_bits);
 
 static rure *casei_rure_compile(const uint8_t *pattern, size_t length,
 		rure_error *error) {
@@ -25,45 +23,16 @@ static int casei_rure_find(rure *re, const uint8_t *haystack, size_t length,
 	return rure_casei_find(re, haystack, length, 0, match, dispatch_bits) ? 1 : 0;
 }
 
-static int casei_rure_find_captures(rure *re, const uint8_t *haystack,
-		size_t length, rure_captures *captures, uint32_t *dispatch_bits) {
-	return rure_casei_find_captures(re, haystack, length, 0, captures, dispatch_bits) ? 1 : 0;
-}
-
-static int casei_rure_captures_at(rure_captures *captures, size_t index,
-		rure_match *match) {
-	return rure_captures_at(captures, index, match) ? 1 : 0;
-}
-
-// casei_rure_each writes up to cap (start, end, pattern) triples of
-// consecutive non-overlapping matches from start into out, in one native call,
-// and returns how many it wrote. A capture set selects the matched branch.
+// casei_rure_each writes up to cap (start, end) pairs of consecutive
+// non-overlapping matches from start into out, in one native call, and returns
+// how many it wrote.
 static size_t casei_rure_each(rure *re, const uint8_t *haystack, size_t length,
-		size_t start, rure_captures *captures, size_t groups, size_t *out, size_t cap) {
+		size_t start, size_t *out, size_t cap) {
 	size_t n = 0;
 	rure_match match;
-	while (n < cap && start <= length) {
-		size_t pattern = 0;
-		if (captures == NULL) {
-			if (!rure_find(re, haystack, length, start, &match)) {
-				break;
-			}
-		} else {
-			if (!rure_find_captures(re, haystack, length, start, captures)) {
-				break;
-			}
-			rure_captures_at(captures, 0, &match);
-			rure_match branch;
-			for (size_t group = 1; group <= groups; group++) {
-				if (rure_captures_at(captures, group, &branch)) {
-					pattern = group - 1;
-					break;
-				}
-			}
-		}
-		out[3 * n] = match.start;
-		out[3 * n + 1] = match.end;
-		out[3 * n + 2] = pattern;
+	while (n < cap && start <= length && rure_find(re, haystack, length, start, &match)) {
+		out[2 * n] = match.start;
+		out[2 * n + 1] = match.end;
 		n++;
 		start = match.end > match.start ? match.end : match.end + 1;
 	}
@@ -85,18 +54,13 @@ import (
 	"unsafe"
 )
 
-// Regex is a rust-regex C API expression compiled with Unicode mode. Ordered
-// alternations retain a capture for each branch so Find can expose the arena's
-// lowest-pattern-index tie rule.
+// Regex is a rust-regex C API expression compiled with Unicode mode. It has no
+// capture groups: explicit captures turn off rust-regex's literal-set fast
+// path, so an alternation reports pattern ID -1, as Go's regexp does.
 type Regex struct {
 	re           *C.rure
-	captures     int
+	pattern      int // the pattern ID Find and Each report: 0, or -1 for an alternation
 	dispatchBits atomic.Int32
-	pool         sync.Pool // *capture
-}
-
-type capture struct {
-	ptr *C.rure_captures
 }
 
 var empty = [1]byte{}
@@ -111,17 +75,10 @@ func (re *Regex) VectorBits() int {
 	return int(re.dispatchBits.Load())
 }
 
-func (re *Regex) recordDispatch(bits C.uint32_t) {
-	re.dispatchBits.Store(int32(bits))
-}
-
 // Compile builds pattern with Unicode mode enabled. Callers add (?i) to select
-// rust-regex's Unicode simple-case-fold behavior. Errors are returned rather
-// than replaced by an interpreted or scalar baseline.
-func Compile(pattern string, captures int) (*Regex, error) {
-	if captures < 0 {
-		return nil, fmt.Errorf("rure capture count must not be negative")
-	}
+// rust-regex's Unicode simple-case-fold behavior. Errors are returned rather than replaced by an interpreted or scalar
+// baseline.
+func Compile(pattern string) (*Regex, error) {
 	error := C.rure_error_new()
 	if error == nil {
 		return nil, fmt.Errorf("rure error allocation failed")
@@ -137,39 +94,33 @@ func Compile(pattern string, captures int) (*Regex, error) {
 		}
 		return nil, fmt.Errorf("rure compile failed: %s", C.GoString(message))
 	}
-
-	compiled := &Regex{re: re, captures: captures}
-	if captures > 0 {
-		compiled.pool.New = func() any {
-			ptr := C.rure_captures_new(re)
-			if ptr == nil {
-				panic("rure capture allocation failed")
-			}
-			return &capture{ptr: ptr}
-		}
-		// Seed allocation before arena timing begins. Compiled expressions and
-		// their capture storage intentionally live for the benchmark process.
-		compiled.pool.Put(compiled.pool.New())
-	}
-	return compiled, nil
+	// Compiled expressions intentionally live for the benchmark process.
+	return &Regex{re: re}, nil
 }
 
 // CompileLiteral builds a case-insensitive Unicode literal.
 func CompileLiteral(pattern string) (*Regex, error) {
-	return Compile("(?i)"+QuoteMeta(pattern), 0)
+	return Compile("(?i)" + QuoteMeta(pattern))
 }
 
-// CompileAlternation builds an ordered literal alternation. Capture branches
-// let Find report the leftmost branch selected by rust-regex and its pattern ID.
+// CompileAlternation builds an ordered case-insensitive literal alternation.
+// rust-regex's leftmost-first semantics choose the same match
+// as the arena's lowest-pattern-index tie rule; Find and Each report its
+// pattern ID as -1.
 func CompileAlternation(patterns []string) (*Regex, error) {
 	if len(patterns) == 0 {
-		return &Regex{}, nil
+		return &Regex{pattern: -1}, nil
 	}
 	branches := make([]string, len(patterns))
 	for i, pattern := range patterns {
-		branches[i] = "(" + QuoteMeta(pattern) + ")"
+		branches[i] = QuoteMeta(pattern)
 	}
-	return Compile("(?i)(?:"+strings.Join(branches, "|")+")", len(patterns))
+	re, err := Compile("(?i)(?:" + strings.Join(branches, "|") + ")")
+	if err != nil {
+		return nil, err
+	}
+	re.pattern = -1
+	return re, nil
 }
 
 // QuoteMeta quotes s as one rust-regex literal. The expression syntax accepts
@@ -203,32 +154,26 @@ func pointer(s string) *C.uint8_t {
 // eachBatch is how many matches Each collects per native call.
 const eachBatch = 256
 
-var eachBuffers = sync.Pool{New: func() any { return new([3 * eachBatch]C.size_t) }}
+var eachBuffers = sync.Pool{New: func() any { return new([2 * eachBatch]C.size_t) }}
 
-// Each calls yield with the start, pattern index and byte width of each
-// consecutive non-overlapping match, as casei's Matcher.Each orders them. The
-// matching loop runs in C and returns matches in batches, so enumeration costs
-// one native call per batch rather than one per match. It returns false when
-// yield stops it.
+// Each calls yield with the start, pattern ID (as Find reports it) and byte
+// width of each consecutive non-overlapping match, as casei's Matcher.Each
+// orders them. The matching loop runs in C and returns matches in batches, so
+// enumeration costs one native call per batch rather than one per match. It
+// returns false when yield stops it.
 func (re *Regex) Each(haystack string, yield func(start, pattern, width int) bool) bool {
 	if re == nil || re.re == nil {
 		return true
 	}
-	out := eachBuffers.Get().(*[3 * eachBatch]C.size_t)
+	out := eachBuffers.Get().(*[2 * eachBatch]C.size_t)
 	defer eachBuffers.Put(out)
-	var captures *C.rure_captures
-	if re.captures > 0 {
-		c := re.pool.Get().(*capture)
-		defer re.pool.Put(c)
-		captures = c.ptr
-	}
 	for at := 0; ; {
 		n := int(C.casei_rure_each(re.re, pointer(haystack), C.size_t(len(haystack)), C.size_t(at),
-			captures, C.size_t(re.captures), &out[0], eachBatch))
+			&out[0], eachBatch))
 		runtime.KeepAlive(haystack)
 		for i := range n {
-			start, end := int(out[3*i]), int(out[3*i+1])
-			if !yield(start, int(out[3*i+2]), end-start) {
+			start, end := int(out[2*i]), int(out[2*i+1])
+			if !yield(start, re.pattern, end-start) {
 				return false
 			}
 			at = end
@@ -239,48 +184,24 @@ func (re *Regex) Each(haystack string, yield func(start, pattern, width int) boo
 	}
 }
 
-// Find returns the leftmost byte start and, for an alternation, the selected
-// pattern index. It records the audited Rust backend for this exact query; the
-// scoreboard excludes any query that did not observe memchr AVX2.
+// Find returns the leftmost byte start and the pattern ID: 0 for a literal,
+// -1 for an alternation. It records the audited Rust backend for this exact
+// query as a diagnostic; the width never removes the entrant from the field.
 func (re *Regex) Find(haystack string) (start, pattern int, ok bool) {
 	if re == nil || re.re == nil {
 		return 0, 0, false
 	}
-	if re.captures == 0 {
-		var (
-			match        C.rure_match
-			dispatchBits C.uint32_t
-		)
-		if C.casei_rure_find(re.re, pointer(haystack), C.size_t(len(haystack)), &match, &dispatchBits) == 0 {
-			re.recordDispatch(dispatchBits)
-			runtime.KeepAlive(haystack)
-			return 0, 0, false
-		}
-		re.recordDispatch(dispatchBits)
-		runtime.KeepAlive(haystack)
-		return int(C.casei_rure_match_start(&match)), 0, true
-	}
-
-	captures := re.pool.Get().(*capture)
-	var dispatchBits C.uint32_t
-	matched := C.casei_rure_find_captures(
-		re.re, pointer(haystack), C.size_t(len(haystack)), captures.ptr, &dispatchBits,
+	var (
+		match        C.rure_match
+		dispatchBits C.uint32_t
 	)
-	re.recordDispatch(dispatchBits)
+	found := C.casei_rure_find(re.re, pointer(haystack), C.size_t(len(haystack)), &match, &dispatchBits)
+	re.dispatchBits.Store(int32(dispatchBits))
 	runtime.KeepAlive(haystack)
-	if matched == 0 {
-		re.pool.Put(captures)
+	if found == 0 {
 		return 0, 0, false
 	}
-	for group := 1; group <= re.captures; group++ {
-		var match C.rure_match
-		if C.casei_rure_captures_at(captures.ptr, C.size_t(group), &match) != 0 {
-			re.pool.Put(captures)
-			return int(C.casei_rure_match_start(&match)), group - 1, true
-		}
-	}
-	re.pool.Put(captures)
-	panic("rure alternation matched without a selected branch")
+	return int(C.casei_rure_match_start(&match)), re.pattern, true
 }
 
 // Index returns the byte start of the first match, or -1 when there is none.

@@ -9,9 +9,9 @@
 +memchr = { path = "../memchr-source" }
 --- a/src/rure.rs
 +++ b/src/rure.rs
-@@ -20,0 +21,54 @@
+@@ -20,0 +21,31 @@
 +
-+// These private arena entry points reset and read the patched memchr audit in
++// This private arena entry point resets and reads the patched memchr audit in
 +// the same native call. Keeping the thread-local operations together matters:
 +// a Go caller may return on a different OS thread between separate cgo calls.
 +ffi_fn! {
@@ -32,29 +32,6 @@
 +                (*match_info).end = m.end();
 +            }
 +        }).is_some();
-+        unsafe {
-+            if !dispatch_bits.is_null() {
-+                *dispatch_bits = u32::from(memchr::casei_dispatch_bits());
-+            }
-+        }
-+        matched
-+    }
-+}
-+
-+ffi_fn! {
-+    fn rure_casei_find_captures(
-+        re: *const Regex,
-+        haystack: *const u8,
-+        len: size_t,
-+        start: size_t,
-+        captures: *mut Captures,
-+        dispatch_bits: *mut u32,
-+    ) -> bool {
-+        memchr::casei_dispatch_reset();
-+        let re = unsafe { &*re };
-+        let haystack = unsafe { slice::from_raw_parts(haystack, len) };
-+        let slots = unsafe { &mut (*captures).0 };
-+        let matched = re.captures_read_at(slots, haystack, start).is_some();
 +        unsafe {
 +            if !dispatch_bits.is_null() {
 +                *dispatch_bits = u32::from(memchr::casei_dispatch_bits());
