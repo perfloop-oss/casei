@@ -161,6 +161,7 @@ const (
 	rawByteMultiAnchorForms         = 4
 	rawByteMultiAnchorStartOffsets  = 4
 	rawByteMultiAnchorConfirmGroups = 3
+	rawByteMultiAnchorUnitCapacity  = rawByteMultiAnchorStartOffsets * rawByteMultiAnchorStartOffsets
 )
 
 // rawByteMultiAnchorPairSet lists the exact two-byte spellings of one selected
@@ -347,49 +348,43 @@ func rawByteMultiAnchorPairSetFor(r rune) (rawByteMultiAnchorPairSet, bool) {
 	return out, out.n != 0
 }
 
-// rawByteMultiAnchorPrefixWidths records the bounded set of possible byte
-// widths before an anchor. The cross product is deliberately collapsed by
-// width: it is only used to nominate replay starts, whose shared plan decides
-// whether that spelling actually matches.
-func rawByteMultiAnchorPrefixWidths(pattern string, end int, out *[rawByteMultiAnchorStartOffsets]uint8) (int, bool) {
-	out[0] = 0
-	n := 1
-	for at := 0; at < end; {
-		r, size := utf8.DecodeRuneInString(pattern[at:])
-		if r == utf8.RuneError && size == 1 {
-			return 0, false
-		}
-		var next [rawByteMultiAnchorStartOffsets]uint8
-		nextN := 0
-		for member := r; ; member = unicode.SimpleFold(member) {
-			var encoded [utf8.UTFMax]byte
-			width := utf8.EncodeRune(encoded[:], member)
-			for i := 0; i < n; i++ {
-				value := int(out[i]) + width
-				if value > int(^uint8(0)) {
-					return 0, false
-				}
-				duplicate := false
-				for j := 0; j < nextN; j++ {
-					duplicate = duplicate || next[j] == uint8(value)
-				}
-				if !duplicate {
-					if nextN == len(next) {
-						return 0, false
-					}
-					next[nextN] = uint8(value)
-					nextN++
-				}
+type rawByteMultiAnchorWidthSet struct {
+	offsets [rawByteMultiAnchorStartOffsets]uint8
+	n       uint8
+}
+
+// rawByteMultiAnchorAddRuneWidths extends an ordered, deduplicated set of
+// source-byte widths by every spelling in one rune's simple-fold orbit. A
+// failed extension leaves the input state intact; callers reject only ranges
+// that include this rune.
+func rawByteMultiAnchorAddRuneWidths(widths *rawByteMultiAnchorWidthSet, r rune) bool {
+	var next rawByteMultiAnchorWidthSet
+	for member := r; ; member = unicode.SimpleFold(member) {
+		var encoded [utf8.UTFMax]byte
+		width := utf8.EncodeRune(encoded[:], member)
+		for i := 0; i < int(widths.n); i++ {
+			value := int(widths.offsets[i]) + width
+			if value > int(^uint8(0)) {
+				return false
 			}
-			if unicode.SimpleFold(member) == r {
-				break
+			duplicate := false
+			for j := 0; j < int(next.n); j++ {
+				duplicate = duplicate || next.offsets[j] == uint8(value)
+			}
+			if !duplicate {
+				if int(next.n) == len(next.offsets) {
+					return false
+				}
+				next.offsets[next.n] = uint8(value)
+				next.n++
 			}
 		}
-		*out = next
-		n = nextN
-		at += size
+		if unicode.SimpleFold(member) == r {
+			break
+		}
 	}
-	return n, true
+	*widths = next
+	return true
 }
 
 // rawByteMultiAnchorFrequency estimates selectivity only from the immutable
@@ -442,58 +437,76 @@ type rawByteMultiAnchorCandidate struct {
 	at     int
 }
 
-// rawByteMultiAnchorRelativeWidths records all possible byte displacements
-// from start to end. Independent width choices may yield a crossed offset, but
-// that only creates a scalar-guarded replay; it cannot remove the true one.
-func rawByteMultiAnchorRelativeWidths(pattern string, start, end int, out *[rawByteMultiAnchorStartOffsets]uint8) (int, bool) {
-	return rawByteMultiAnchorPrefixWidths(pattern[start:end], end-start, out)
-}
-
 type rawByteMultiAnchorUnit struct {
 	at    int
 	pairs rawByteMultiAnchorPairSet
 }
 
-// rawByteMultiAnchorCandidateFor chooses three width-stable two-byte interior
-// pairs. Variable-width forms between pairs are represented by every bounded
-// displacement; this is why the vector filter has three confirmation groups.
-func rawByteMultiAnchorCandidateFor(pattern string, primary, confirm, guard rawByteMultiAnchorUnit, frequency *[256]uint16) (rawByteMultiAnchorCandidate, bool) {
-	if primary.at == 0 {
-		return rawByteMultiAnchorCandidate{}, false
+// rawByteMultiAnchorRelativeWidthsByPrimary propagates every possible
+// displacement from one primary to all later units. Each source rune is folded
+// once for this primary instead of once per candidate triple.
+func rawByteMultiAnchorRelativeWidthsByPrimary(pattern string, units *[rawByteMultiAnchorUnitCapacity]rawByteMultiAnchorUnit, unitN, primary int, out *[rawByteMultiAnchorUnitCapacity]rawByteMultiAnchorWidthSet) {
+	widths := rawByteMultiAnchorWidthSet{offsets: [rawByteMultiAnchorStartOffsets]uint8{0}, n: 1}
+	at := units[primary].at
+	for target := primary + 1; target < unitN; target++ {
+		end := units[target].at
+		for at < end && widths.n != 0 {
+			r, size := utf8.DecodeRuneInString(pattern[at:])
+			if r == utf8.RuneError && size == 1 || !rawByteMultiAnchorAddRuneWidths(&widths, r) {
+				widths = rawByteMultiAnchorWidthSet{}
+				break
+			}
+			at += size
+		}
+		out[target] = widths
 	}
-	var starts, guardOffsets [rawByteMultiAnchorStartOffsets]uint8
-	var possibleConfirmOffsets [rawByteMultiAnchorStartOffsets]uint8
-	startN, ok := rawByteMultiAnchorPrefixWidths(pattern, primary.at, &starts)
-	if !ok || startN == 0 {
-		return rawByteMultiAnchorCandidate{}, false
+}
+
+// rawByteMultiAnchorSelectCandidate uses the original triple order over
+// precomputed widths and costs. Feasibility and tie checks therefore retain the
+// selector's original first-encountered behavior without rescanning literals.
+func rawByteMultiAnchorSelectCandidate(pattern string, units *[rawByteMultiAnchorUnitCapacity]rawByteMultiAnchorUnit, unitN int, starts *[rawByteMultiAnchorUnitCapacity]rawByteMultiAnchorWidthSet, costs *[rawByteMultiAnchorUnitCapacity]uint64, filter *rawByteMultiAnchorFilter) (rawByteMultiAnchorCandidate, bool) {
+	var best rawByteMultiAnchorCandidate
+	found := false
+	for primary := 0; primary < unitN; primary++ {
+		if units[primary].at == 0 || starts[primary].n == 0 {
+			continue
+		}
+		var relative [rawByteMultiAnchorUnitCapacity]rawByteMultiAnchorWidthSet
+		rawByteMultiAnchorRelativeWidthsByPrimary(pattern, units, unitN, primary, &relative)
+		for confirm := primary + 1; confirm < unitN; confirm++ {
+			confirmWidths := relative[confirm]
+			if confirmWidths.n == 0 || confirmWidths.n > rawByteMultiAnchorConfirmGroups {
+				continue
+			}
+			for guard := confirm + 1; guard < unitN; guard++ {
+				guardWidths := relative[guard]
+				if guardWidths.n == 0 || !filter.canAddConfirmationOffsets(confirmWidths.offsets[:confirmWidths.n]) {
+					continue
+				}
+				candidate := rawByteMultiAnchorCandidate{
+					anchor: rawByteMultiAnchor{
+						primary:  units[primary].pairs,
+						confirm:  units[confirm].pairs,
+						guard:    units[guard].pairs,
+						starts:   starts[primary].offsets,
+						startN:   starts[primary].n,
+						confirmN: confirmWidths.n,
+						guardN:   guardWidths.n,
+					},
+					score: costs[primary] + costs[confirm] + costs[guard],
+					at:    units[primary].at,
+				}
+				copy(candidate.anchor.confirmOffset[:], confirmWidths.offsets[:confirmWidths.n])
+				copy(candidate.anchor.guardOffset[:], guardWidths.offsets[:guardWidths.n])
+				if !found || candidate.anchor.confirmN < best.anchor.confirmN ||
+					candidate.anchor.confirmN == best.anchor.confirmN && (candidate.score < best.score || candidate.score == best.score && candidate.at > best.at) {
+					best, found = candidate, true
+				}
+			}
+		}
 	}
-	confirmN, ok := rawByteMultiAnchorRelativeWidths(pattern, primary.at, confirm.at, &possibleConfirmOffsets)
-	if !ok || confirmN == 0 || confirmN > rawByteMultiAnchorConfirmGroups {
-		return rawByteMultiAnchorCandidate{}, false
-	}
-	var confirmOffsets [rawByteMultiAnchorConfirmGroups]uint8
-	copy(confirmOffsets[:], possibleConfirmOffsets[:confirmN])
-	guardN, ok := rawByteMultiAnchorRelativeWidths(pattern, primary.at, guard.at, &guardOffsets)
-	if !ok || guardN == 0 {
-		return rawByteMultiAnchorCandidate{}, false
-	}
-	return rawByteMultiAnchorCandidate{
-		anchor: rawByteMultiAnchor{
-			primary:       primary.pairs,
-			confirm:       confirm.pairs,
-			guard:         guard.pairs,
-			starts:        starts,
-			confirmOffset: confirmOffsets,
-			guardOffset:   guardOffsets,
-			startN:        uint8(startN),
-			confirmN:      uint8(confirmN),
-			guardN:        uint8(guardN),
-		},
-		score: rawByteMultiAnchorPairCost(primary.pairs, frequency) +
-			rawByteMultiAnchorPairCost(confirm.pairs, frequency) +
-			rawByteMultiAnchorPairCost(guard.pairs, frequency),
-		at: primary.at,
-	}, true
+	return best, found
 }
 
 func rawByteMultiAnchorAddTable(table *[64]byte, pairs rawByteMultiAnchorPairSet, second bool, bit byte) {
@@ -535,8 +548,10 @@ func (p *searchPlan) makeRawByteMultiAnchorFilter(patterns []string) {
 	}
 	frequency := rawByteMultiAnchorFrequency(patterns)
 	for patternID, pattern := range patterns {
-		var units [rawByteMultiAnchorStartOffsets * rawByteMultiAnchorStartOffsets]rawByteMultiAnchorUnit
+		var units [rawByteMultiAnchorUnitCapacity]rawByteMultiAnchorUnit
+		var starts [rawByteMultiAnchorUnitCapacity]rawByteMultiAnchorWidthSet
 		unitN := 0
+		prefixWidths := rawByteMultiAnchorWidthSet{offsets: [rawByteMultiAnchorStartOffsets]uint8{0}, n: 1}
 		for at := 0; at < len(pattern); {
 			r, size := utf8.DecodeRuneInString(pattern[at:])
 			if r == utf8.RuneError && size == 1 {
@@ -547,26 +562,23 @@ func (p *searchPlan) makeRawByteMultiAnchorFilter(patterns []string) {
 					return
 				}
 				units[unitN] = rawByteMultiAnchorUnit{at: at, pairs: pairs}
+				if prefixWidths.n != 0 {
+					starts[unitN] = prefixWidths
+				}
 				unitN++
+			}
+			if prefixWidths.n != 0 && !rawByteMultiAnchorAddRuneWidths(&prefixWidths, r) {
+				// No longer absolute prefix can recover after overflow or a
+				// fifth width, but later units may still confirm earlier primaries.
+				prefixWidths = rawByteMultiAnchorWidthSet{}
 			}
 			at += size
 		}
-		var best rawByteMultiAnchorCandidate
-		found := false
-		for primary := 0; primary < unitN; primary++ {
-			for confirm := primary + 1; confirm < unitN; confirm++ {
-				for guard := confirm + 1; guard < unitN; guard++ {
-					candidate, ok := rawByteMultiAnchorCandidateFor(pattern, units[primary], units[confirm], units[guard], &frequency)
-					if !ok || !p.rawByteMulti.canAddConfirmationOffsets(candidate.anchor.confirmOffset[:candidate.anchor.confirmN]) {
-						continue
-					}
-					if !found || candidate.anchor.confirmN < best.anchor.confirmN ||
-						candidate.anchor.confirmN == best.anchor.confirmN && (candidate.score < best.score || candidate.score == best.score && candidate.at > best.at) {
-						best, found = candidate, true
-					}
-				}
-			}
+		var costs [rawByteMultiAnchorUnitCapacity]uint64
+		for i := 0; i < unitN; i++ {
+			costs[i] = rawByteMultiAnchorPairCost(units[i].pairs, &frequency)
 		}
+		best, found := rawByteMultiAnchorSelectCandidate(pattern, &units, unitN, &starts, &costs, &p.rawByteMulti)
 		if !found {
 			p.rawByteMulti = rawByteMultiAnchorFilter{}
 			return
