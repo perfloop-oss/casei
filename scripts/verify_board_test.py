@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 
 from pathlib import Path
+import random
 import sys
 import tempfile
+import math
+from collections import defaultdict
+from statistics import fmean
 import unittest
 
 sys.dont_write_bytecode = True
@@ -128,6 +132,105 @@ class VerifyBoardTest(unittest.TestCase):
                 self.verify(run, bad)
         self.assertFails(HEADER, "the run has no cells")
 
+
+
+def noisy(rng, sigma, slower=None, by=0.0, cells=()):
+    """Per-cell ratios for one run: every cell 0.8 under multiplicative noise
+    sigma, the cells of family slower by a factor 1+by, and cells x0.2."""
+    def ratio(n):
+        return 0.8 * (1 + by * n.startswith(f"{slower}/")) * (0.2 if n in cells else 1) * math.exp(rng.gauss(0, sigma))
+    return {n: {"ratio": round(ratio(n), 6)} for n in NAMES}
+
+
+FAMILIES = sorted({n.split("/")[0] for n in NAMES})
+
+
+def board(rng, sigma, runs, slower=None, by=0.0):
+    """{family: one list of cell ratios per run}, as compare passes to shift."""
+    out = defaultdict(list)
+    for _ in range(runs):
+        run = noisy(rng, sigma, slower, by)
+        for f in FAMILIES:
+            out[f].append([run[n]["ratio"] for n in family(f)])
+    return out
+
+
+class CompareTest(unittest.TestCase):
+    def compare(self, masters, changes, family=None):
+        with tempfile.TemporaryDirectory() as directory:
+            def write(kind, texts):
+                paths = [Path(directory) / f"{kind}{i}.txt" for i in range(len(texts))]
+                for path, text in zip(paths, texts):
+                    path.write_text(text)
+                return paths
+            return verify.compare(write("master", masters), write("change", changes), family=family)
+
+    def runs(self, seed, family=None, **change):
+        """Two master and two change transcripts under 3% cell noise."""
+        rng = random.Random(seed)
+        only = f"{family}/" if family else ""
+        return ([transcript(only=only, **noisy(rng, 0.03)) for _ in range(2)],
+                [transcript(only=only, **noisy(rng, 0.03, **change)) for _ in range(2)])
+
+    def verdicts(self, lines):
+        return {l.split()[0]: l.split()[-1] for l in lines[2:]}
+
+    def test_neutral_change_passes(self):
+        lines, failures = self.compare(*self.runs(1))
+        self.assertEqual(failures, [])
+        self.assertEqual(set(self.verdicts(lines).values()), {"same"})
+
+    def test_family_regression_fails(self):
+        lines, failures = self.compare(*self.runs(2, slower="script", by=0.04))
+        self.assertEqual([f.split(":")[0] for f in failures], ["script"], failures)
+        self.assertEqual(self.verdicts(lines)["script"], "slower")
+
+    # A real effect on a few cells does not widen the bound: the family is
+    # named faster, not hidden in noise.
+    def test_targeted_improvement_is_named(self):
+        lines, failures = self.compare(*self.runs(3, cells=family("count")[:2]))
+        self.assertEqual(failures, [])
+        self.assertEqual(self.verdicts(lines)["count"], "faster")
+
+    def test_compares_one_family(self):
+        self.assertEqual(self.compare(*self.runs(6, "density"), family="density")[1], [])
+        failures = self.compare(*self.runs(7, "density", slower="density", by=0.05), family="density")[1]
+        self.assertEqual([f.split(":")[0] for f in failures], ["density"])
+
+    def test_compare_checks_each_run(self):
+        bad = transcript(header=HEADER.replace("model=143", "model=106"))
+        failures = self.compare([transcript()] * 2, [transcript(), bad])[1]
+        self.assertTrue(any("change1.txt: host: model=106" in f for f in failures), failures)
+        unanswered = transcript(**{family("case")[0]: {"supported": 0}})
+        self.assertIn("case: the runs do not all answer the same cells",
+                      self.compare([transcript()] * 2, [transcript(), unanswered])[1])
+        with self.assertRaisesRegex(verify.VerificationError, "at least two"):
+            self.compare([transcript()], [transcript()])
+
+    def test_t_quantile(self):
+        for p, df, want in ((0.995, 2, 9.925), (0.975, 10, 2.228), (0.99, 23, 2.500), (0.995, 27, 2.771)):
+            self.assertAlmostEqual(verify.t_quantile(p, df), want, places=3)
+
+    # With no real effect, the rule this guard replaces -- no family aggregate
+    # above master's by more than the spread |A1-A2| of two master runs --
+    # fails most changes, at any noise level. Against the mean of the master
+    # runs, P(C - mean > |A1-A2|) = atan(sqrt(3/4))/pi = 0.227 per family
+    # under normal noise, so 1 - 0.773**8 = 0.87 across 8 families; against
+    # the larger master run, 0.17 and 0.77. compare fails at most ALPHA of
+    # them, and still fails a 4% family regression.
+    def test_false_rejects_and_power(self):
+        rng, trials, sigma, alpha = random.Random(8), 300, 0.03, verify.ALPHA / len(FAMILIES)
+        slower = lambda m, c: (lambda d, bound: d > bound)(*verify.shift(m, c, alpha))
+        old = new = caught = 0
+        for _ in range(trials):
+            m, c = board(rng, sigma, 2), board(rng, sigma, 2)
+            a1, a2, change = (lambda f: fmean(m[f][0])), (lambda f: fmean(m[f][1])), (lambda f: fmean(c[f][0]))
+            old += any(change(f) - (a1(f) + a2(f)) / 2 > abs(a1(f) - a2(f)) for f in FAMILIES)
+            new += any(slower(m[f], c[f]) for f in FAMILIES)
+            caught += slower(m["script"], board(rng, sigma, 2, "script", 0.04)["script"])
+        self.assertGreater(old / trials, 0.8)
+        self.assertLess(new / trials, 0.05)
+        self.assertGreater(caught / trials, 0.95)
 
 if __name__ == "__main__":
     unittest.main()

@@ -176,10 +176,8 @@ change. A change lands on `master` when:
    whose route it changes do not slow;
 3. no `BenchmarkBar` row that is below 1.0 on `master` reaches 1.0 on that
    host;
-4. a performance change shows the `verify_board.py` family aggregates for
-   `master` and the change on that host: the families it improves, and no
-   family aggregate higher than `master` by more than the spread between two
-   `master` runs on the same host.
+4. a performance change passes `verify_board.py --master ... --change ...`
+   for runs of both on that host, as its help says, and shows its table.
 
 An eligibility bound (pattern count, length, input size) comes from a stated
 cost model, not from the shape of a measured row. Prefer one general route that
