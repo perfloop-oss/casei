@@ -27,6 +27,17 @@ difference exceeds the bound, otherwise same. A slower family fails. The noise
 is each cell's variance between runs of the same code, so it costs no extra
 runs and a real effect cannot widen it. When cells' noise is independent, a
 change with no effect fails some family with probability at most ALPHA (5%).
+
+The bound shrinks as 1/sqrt(runs). In a noisy family it can be larger than a
+real regression, so read the bound, not only the verdict. Tighten it only by
+adding alternating runs; never drop, replace or re-run runs until a comparison
+passes.
+
+The bound assumes cells' noise is independent within a run. If a run moves a
+family's cells together, the bound is too narrow and changes with no effect
+fail more often, and adding runs does not fix that. To check it, run the same
+code several times: a family's cells times the variance of its run aggregates,
+over the mean of its cells' variances, should be close to 1.
 """
 
 import argparse

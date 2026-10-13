@@ -177,7 +177,8 @@ change. A change lands on `master` when:
 3. no `BenchmarkBar` row that is below 1.0 on `master` reaches 1.0 on that
    host;
 4. a performance change passes `verify_board.py --master ... --change ...`
-   for runs of both on that host, as its help says, and shows its table.
+   for full-board runs of both on that host, as its help says, and shows its
+   table. Read each family's bound: tighten it only with more alternating runs.
 
 An eligibility bound (pattern count, length, input size) comes from a stated
 cost model, not from the shape of a measured row. Prefer one general route that

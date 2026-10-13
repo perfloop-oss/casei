@@ -207,6 +207,25 @@ class CompareTest(unittest.TestCase):
         with self.assertRaisesRegex(verify.VerificationError, "at least two"):
             self.compare([transcript()], [transcript()])
 
+    def test_shift_exact(self):
+        # One cell, two runs each: variance 2 per arm over 2 runs gives se^2 = 2
+        # and df = 2^2 / (1 + 1) = 2.
+        delta, bound = verify.shift([[1], [3]], [[2], [4]], 0.05)
+        self.assertEqual(delta, 1)
+        self.assertAlmostEqual(bound, verify.t_quantile(0.95, 2) * math.sqrt(2))
+
+    # A rise between one and two bounds is slower: the verdict is delta > bound.
+    def test_rise_above_one_bound_is_slower(self):
+        cells = family("op")
+        spread = [0.01 * (1 + i % 5) for i in range(len(cells))]
+        master = [[0.5 + s for s in spread], [0.5 - s for s in spread]]
+        _, bound = verify.shift(master, master, verify.ALPHA / len(FAMILIES))
+        change = [[x + 1.5 * bound for x in run] for run in master]
+        text = lambda run: transcript(**{n: {"ratio": x} for n, x in zip(cells, run)})
+        lines, failures = self.compare([text(r) for r in master], [text(r) for r in change])
+        self.assertEqual(self.verdicts(lines)["op"], "slower", lines)
+        self.assertEqual([f.split(":")[0] for f in failures], ["op"], failures)
+
     def test_t_quantile(self):
         for p, df, want in ((0.995, 2, 9.925), (0.975, 10, 2.228), (0.99, 23, 2.500), (0.995, 27, 2.771)):
             self.assertAlmostEqual(verify.t_quantile(p, df), want, places=3)
