@@ -8,8 +8,10 @@
   full board is the acceptance check.
 - casei answers every cell, case-sensitive cells included, and every pinned
   entrant that supports a cell was timed: on a case-sensitive cell, every
-  entrant with an exact mode. Veloz is required on every folded cell; its mode
-  flags distinguish the direct ASCII-singleton route from the translated view.
+  entrant with an exact mode. RustAC is direct on ASCII folded/exact cells and
+  uses its labeled simple-fold view on folded UTF-8 cells. Veloz is required on
+  every folded cell; mode flags distinguish its direct ASCII-singleton route
+  from the translated view.
   (BenchmarkBoard fails a cell outright on any wrong answer, so a wrong answer
   leaves its cell out of the run.)
 - Every timed entrant's ratio is positive and finite. A cell's x_vs_best is
@@ -54,6 +56,7 @@ import sys
 PINNED = Path(__file__).resolve().parent.parent / "arena" / "board" / "cells.txt"
 ENTRANTS = ("regexp", "pcre2", "rure", "vectorscan", "stringzilla", "veloz", "rustac")
 VELOZ_MODES = ("veloz_direct_active", "veloz_view_active")
+RUSTAC_MODES = ("rustac_direct_active", "rustac_view_active")
 HOST = {"vendor": "GenuineIntel", "family": "6", "model": "143",
         "avx2": "1", "avx512f": "1", "avx512bw": "1", "avx512vbmi": "1"}
 AGGREGATE_LIMIT = 1.0
@@ -93,7 +96,8 @@ def parse(path):
             values = dict(zip(fields[3::2], fields[2::2]))  # unit -> value, after the name and N
             try:
                 cells[name] = {u: float(values[u]) for u in
-                               ("candidate_supported", *(f"{e}_{m}" for e in ENTRANTS for m in ("active", "x")), *VELOZ_MODES)}
+                               ("candidate_supported", *(f"{e}_{m}" for e in ENTRANTS for m in ("active", "x")),
+                                *VELOZ_MODES, *RUSTAC_MODES)}
             except (KeyError, ValueError) as err:
                 raise VerificationError(f"{path}:{number}: missing or invalid metric {err}") from err
     if header is None or "seed" not in header:
@@ -102,14 +106,11 @@ def parse(path):
 
 
 def supported(name, tier):
-    """Return BenchmarkBoard's roster from field.yaml tier/board_tier metadata."""
+    """Return the full BenchmarkBoard roster for the pinned host."""
     out = {"regexp", "pcre2", "rure", "vectorscan", "stringzilla"}
     if name.endswith(",case=cs"):
         return out | {"rustac"}
-    out.add("veloz")
-    if tier == "ascii":
-        out.add("rustac")
-    return out
+    return out | {"rustac", "veloz"}
 
 
 def expected_veloz_modes(name, tier):
@@ -117,6 +118,13 @@ def expected_veloz_modes(name, tier):
     if name.endswith(",case=cs"):
         return 0, 0
     if tier == "ascii" and "/n=1," in name:
+        return 1, 0
+    return 0, 1
+
+
+def expected_rustac_modes(name, tier):
+    """Return direct RustAC or its labeled simple-fold view mode."""
+    if name.endswith(",case=cs") or tier == "ascii":
         return 1, 0
     return 0, 1
 
@@ -159,6 +167,14 @@ def measure(path, pinned=PINNED, family=None):
             failures.append(f"{name}: veloz_view_active={view:g}, want {want_view}")
         if cell["veloz_active"] != direct + view:
             failures.append(f"{name}: veloz_active={cell['veloz_active']:g}, but direct/view modes are {direct:g}/{view:g}")
+        rustac_direct, rustac_view = (cell[metric] for metric in RUSTAC_MODES)
+        want_direct, want_view = expected_rustac_modes(name, tier)
+        if rustac_direct != want_direct:
+            failures.append(f"{name}: rustac_direct_active={rustac_direct:g}, want {want_direct}")
+        if rustac_view != want_view:
+            failures.append(f"{name}: rustac_view_active={rustac_view:g}, want {want_view}")
+        if cell["rustac_active"] != rustac_direct + rustac_view:
+            failures.append(f"{name}: rustac_active={cell['rustac_active']:g}, but direct/view modes are {rustac_direct:g}/{rustac_view:g}")
         ratios = {e: cell[f"{e}_x"] for e in ENTRANTS if cell[f"{e}_active"] == 1}
         failures += [f"{name}: {e}_x={r:g} is not a positive finite ratio"
                      for e, r in ratios.items() if not 0 < r < math.inf]

@@ -76,6 +76,8 @@ baselines:
     tier: [ascii]
     exact_tier: [ascii, utf8]
     semantic_status: exact-for-ascii
+    board_tier: [ascii, utf8]
+    board_semantic_status: exact
     what: Direct pinned Rust aho-corasick 1.1.5 C ABI, DFA with ASCII case
           insensitivity, LeftmostFirst ordering, and enabled prefilter. A
           checked memchr source patch records the memchr backend reached by

@@ -84,6 +84,7 @@ func TestRustACAlternationAgree(t *testing.T) {
 		if ok != wantOK || (ok && (start != want.Start || pattern != want.Pattern)) {
 			t.Errorf("Find(%q, %q) = {%d %d},%v want %+v,%v", tc.haystack, tc.patterns, pattern, start, ok, want, wantOK)
 		}
+		m.Close()
 	}
 
 	rng := rand.New(rand.NewPCG(20260912, 31))
@@ -108,8 +109,28 @@ func TestRustACAlternationAgree(t *testing.T) {
 		start, pattern, ok := m.Find(string(haystack))
 		want, wantOK := refFind(string(haystack), patterns)
 		if ok != wantOK || (ok && (start != want.Start || pattern != want.Pattern)) {
+			m.Close()
 			t.Fatalf("iteration %d Find(%q, %q) = {%d %d},%v want %+v,%v", iteration, haystack, patterns, pattern, start, ok, want, wantOK)
 		}
+		m.Close()
+	}
+}
+
+func TestRustACCloseReportsUseAfterRelease(t *testing.T) {
+	m, err := rustac.Compile([]string{"k"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if start, pattern, ok := m.Find("k"); !ok || start != 0 || pattern != 0 {
+		t.Fatalf("Find before Close = (%d,%d,%t), want (0,0,true)", start, pattern, ok)
+	}
+	m.Close()
+	m.Close()
+	if _, _, _, err := m.FindErr("k"); err == nil {
+		t.Fatal("FindErr after Close did not report release")
+	}
+	if _, err := m.EachErr("k", func(int, int, int) bool { return true }); err == nil {
+		t.Fatal("EachErr after Close did not report release")
 	}
 }
 
@@ -124,9 +145,12 @@ func TestRustACDispatchWidth(t *testing.T) {
 	_, _, _ = m.Find(strings.Repeat("x", 64<<10))
 	got := m.VectorBits()
 	if got != 0 && got != 128 && got != 256 {
+		m.Close()
 		t.Fatalf("Rust Aho-Corasick audited vector width = %d, want 0, 128, or 256", got)
 	}
 	if cpu.X86.HasAVX2 && got != 256 {
+		m.Close()
 		t.Fatalf("Rust Aho-Corasick prefilter width = %d, want AVX2 256", got)
 	}
+	m.Close()
 }
