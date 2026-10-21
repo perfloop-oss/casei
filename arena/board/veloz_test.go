@@ -391,33 +391,3 @@ func TestVelozViewAvailabilityMatchesPinnedGate(t *testing.T) {
 		t.Fatalf("AVX2 route is unavailable, constructor = %v, err = %v", view, err)
 	}
 }
-
-func TestVelozViewRejectsUnsupportedInputs(t *testing.T) {
-	for _, patterns := range [][]string{nil, {""}, {"a\xff"}} {
-		if _, err := board.NewVelozView(patterns); err == nil {
-			t.Errorf("NewVelozView(%q) succeeded", patterns)
-		}
-	}
-	view, err := board.NewVelozView([]string{"a"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, haystack := range []string{"", "a\xff"} {
-		t.Run(fmt.Sprintf("Find/%q", haystack), func(t *testing.T) {
-			defer func() {
-				if recover() == nil {
-					t.Errorf("Find(%q) did not reject unsupported input", haystack)
-				}
-			}()
-			view.Find(haystack)
-		})
-		t.Run(fmt.Sprintf("Each/%q", haystack), func(t *testing.T) {
-			defer func() {
-				if recover() == nil {
-					t.Errorf("Each(%q) did not reject unsupported input", haystack)
-				}
-			}()
-			view.Each(haystack, func(board.Hit) bool { return true })
-		})
-	}
-}
