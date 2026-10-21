@@ -56,8 +56,8 @@ func BenchmarkBoard(b *testing.B) {
 			}
 			for _, e := range c.entrants {
 				metrics[e.name+"_active"], metrics[e.name+"_x"] = 1, pairedRatio(c.candidate.run, e.run)
-				if e.mode != "" {
-					metrics["veloz_"+e.mode+"_active"] = 1
+				if e.name == "veloz" && c.velozMode != "" {
+					metrics["veloz_"+c.velozMode+"_active"] = 1
 				}
 			}
 			for b.Loop() {
@@ -73,13 +73,13 @@ func BenchmarkBoard(b *testing.B) {
 type boardCell struct {
 	candidate boardRun
 	entrants  []boardRun
+	velozMode string
 }
 
 // boardRun is one implementation's operation on the cell. scan reports each
 // hit; a Pattern or Width of -1 is one the implementation does not report.
 type boardRun struct {
 	name string
-	mode string
 	scan func(visit func(board.Hit) bool)
 }
 
@@ -109,6 +109,9 @@ func prepareBoardCell(spec board.Spec, digest string) (*boardCell, error) {
 			return nil, fmt.Errorf("%s supports the cell but cannot compile it: %v", name, err)
 		}
 		if supported {
+			if name == "veloz" {
+				c.velozMode = e.mode
+			}
 			c.entrants = append(c.entrants, e.bind(name, spec.Op, cell.Haystack))
 			runs = append(runs, c.entrants[len(c.entrants)-1])
 		}
@@ -316,21 +319,21 @@ func boardEntrant(name string, patterns []string, asciiTier, exact bool) (boardE
 // pattern, so entrants answer them with Find.
 func (e boardEngine) bind(name, op, h string) boardRun {
 	if op == "each" {
-		return boardRun{name: name, mode: e.mode, scan: func(visit func(board.Hit) bool) {
+		return boardRun{name: name, scan: func(visit func(board.Hit) bool) {
 			e.each(h, func(start, pattern, width int) bool {
 				return visit(board.Hit{Start: start, Pattern: pattern, Width: width})
 			})
 		}}
 	}
 	if findHit := e.findHit; findHit != nil {
-		return boardRun{name: name, mode: e.mode, scan: func(visit func(board.Hit) bool) {
+		return boardRun{name: name, scan: func(visit func(board.Hit) bool) {
 			if hit, ok := findHit(h); ok {
 				visit(hit)
 			}
 		}}
 	}
 	find := e.find
-	return boardRun{name: name, mode: e.mode, scan: func(visit func(board.Hit) bool) {
+	return boardRun{name: name, scan: func(visit func(board.Hit) bool) {
 		if start, pattern, ok := find(h); ok {
 			visit(board.Hit{Start: start, Pattern: pattern, Width: -1})
 		}
@@ -363,8 +366,21 @@ func TestBoardEntrantsAgree(t *testing.T) {
 		if spec.Size > 256<<10 {
 			continue
 		}
-		if _, err := prepareBoardCell(spec, pinned[spec.Name()][1]); err != nil {
+		prepared, err := prepareBoardCell(spec, pinned[spec.Name()][1])
+		if err != nil {
 			t.Errorf("cell %s: %v", spec.Name(), err)
+			continue
+		}
+		wantMode := ""
+		if !spec.Sensitive && board.VelozAvailable() {
+			if pinned[spec.Name()][0] == "ascii" && spec.Count == 1 {
+				wantMode = "direct"
+			} else {
+				wantMode = "view"
+			}
+		}
+		if prepared.velozMode != wantMode {
+			t.Errorf("cell %s Veloz mode = %q, want %q", spec.Name(), prepared.velozMode, wantMode)
 		}
 	}
 }
