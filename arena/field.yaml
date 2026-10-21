@@ -18,9 +18,11 @@
 # sz_capabilities() and errors rather than let a serial fallback flatter this
 # repository. Every bar row reports each entrant's dispatched width.
 #
-# semantic_status decides whether a baseline's time may enter x_vs_best:
+# semantic_status decides whether a baseline's time may enter x_vs_best on
+# its native tier. A board_tier/board_semantic_status pair describes a
+# BenchmarkBoard-only timed adaptation and does not widen other arena consumers.
 #
-#   exact          agrees with the arena oracle on its declared arena tier.
+#   exact          agrees with the arena oracle on its declared tier.
 #                  Counts as a competitor.
 #   exact-for-ascii  agrees on the ASCII tier only. Counts there, excluded
 #                  from UTF-8 rows.
@@ -60,9 +62,15 @@ baselines:
   - name: veloz
     tier: [ascii]
     semantic_status: exact-for-ascii
-    what: mhr3/veloz ascii.IndexFold, hand-written AVX2 on this x86 field.
-          Its SSE/scalar fallback is excluded rather than raced as the same entrant.
-          It has no exact substring search.
+    board_tier: [ascii, utf8]
+    board_semantic_status: exact
+    what: Native mhr3/veloz ascii.IndexFold remains an ASCII-byte fold, using
+          hand-written AVX2 on this x86 field. BenchmarkBoard keeps its direct
+          ASCII-singleton route and uses a timed minimum-orbit simple-fold view
+          for other folded valid-UTF-8 cells, merging per-pattern searches and
+          projecting source spans. This adapter does not widen Veloz's support
+          in other arena consumers. Its SSE/scalar fallback is excluded rather
+          than raced as the same entrant; it has no exact substring mode.
 
   - name: rust-aho-corasick
     tier: [ascii]
