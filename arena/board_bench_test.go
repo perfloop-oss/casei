@@ -170,10 +170,82 @@ type boardEngine struct {
 	each func(h string, yield func(start, pattern, width int) bool) bool
 }
 
-// boardEntrant compiles one entrant when it supports the pattern set, in its
-// native case-sensitive mode when exact. The support rules are field.yaml's
-// tiers and exact_tier and the process gates BenchmarkBar applies. A
-// supporting entrant that fails to compile is an error.
+// asciiFoldOrbit reports whether every rune in r's complete simple-fold orbit
+// is ASCII. ASCII case-insensitive byte search is equivalent only for these
+// whole orbits, not merely for an ASCII spelling of r.
+func asciiFoldOrbit(r rune) bool {
+	if r >= utf8.RuneSelf {
+		return false
+	}
+	for x := unicode.SimpleFold(r); x != r; x = unicode.SimpleFold(x) {
+		if x >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
+}
+
+// rustacASCIICaselessEquivalent certifies a complete set for RustAC's existing
+// ASCII-caseless mode on valid UTF-8 text.
+func rustacASCIICaselessEquivalent(patterns []string) bool {
+	if len(patterns) == 0 {
+		return false
+	}
+	for _, pattern := range patterns {
+		if pattern == "" || !utf8.ValidString(pattern) {
+			return false
+		}
+		for _, r := range pattern {
+			if !asciiFoldOrbit(r) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// rustacExactEquivalent certifies a complete set for RustAC's existing exact
+// mode: folding cannot change any rune in any pattern.
+func rustacExactEquivalent(patterns []string) bool {
+	if len(patterns) == 0 {
+		return false
+	}
+	for _, pattern := range patterns {
+		if pattern == "" || !utf8.ValidString(pattern) {
+			return false
+		}
+		for _, r := range pattern {
+			if unicode.SimpleFold(r) != r {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// velozByteEquivalent certifies Veloz's ASCII-byte fold for one complete
+// literal language: ASCII runes may fold only within ASCII, and non-ASCII
+// runes must be invariant.
+func velozByteEquivalent(pattern string) bool {
+	if pattern == "" || !utf8.ValidString(pattern) {
+		return false
+	}
+	for _, r := range pattern {
+		if r < utf8.RuneSelf {
+			if !asciiFoldOrbit(r) {
+				return false
+			}
+		} else if unicode.SimpleFold(r) != r {
+			return false
+		}
+	}
+	return true
+}
+
+// boardEntrant compiles one entrant when it supports the complete pattern
+// language. The ASCII and exact tiers in field.yaml remain the broad support
+// rules; the byte-language certificates below add only proven per-set
+// equivalences. A supporting entrant that fails to compile is an error.
 func boardEntrant(name string, patterns []string, asciiTier, exact bool) (boardEngine, bool, error) {
 	single := len(patterns) == 1
 	switch name {
@@ -236,8 +308,13 @@ func boardEntrant(name string, patterns []string, asciiTier, exact bool) (boardE
 		}
 		return boardEngine{find: m.Find, each: m.Each}, true, nil
 	case "veloz":
-		// veloz has no exact substring search.
-		if exact || !asciiTier || !single || velozVectorBits() != 256 {
+		// veloz has no exact substring search and only counts when its AVX2
+		// path is available. Its broader byte-language equivalence is still
+		// singleton-only.
+		if exact || !single || velozVectorBits() != 256 {
+			return boardEngine{}, false, nil
+		}
+		if !asciiTier && !velozByteEquivalent(patterns[0]) {
 			return boardEngine{}, false, nil
 		}
 		// veloz has no iterator, so Each restarts IndexFold after each match.
@@ -261,12 +338,22 @@ func boardEntrant(name string, patterns []string, asciiTier, exact bool) (boardE
 			}
 		}}, true, nil
 	case "rustac":
-		// ASCII case insensitivity is exact on the ASCII tier only; exact
-		// matching compares bytes on every tier.
-		if !asciiTier && !exact {
-			return boardEngine{}, false, nil
+		// Preserve the ASCII-tier and exact modes. On a UTF-8 cell, use the
+		// existing exact constructor for an invariant language, or the existing
+		// ASCII-caseless constructor only when every complete fold orbit is
+		// ASCII. Neither mode broadens RustAC's native caseless guard.
+		modeExact := exact
+		if !exact && !asciiTier {
+			switch {
+			case rustacExactEquivalent(patterns):
+				modeExact = true
+			case rustacASCIICaselessEquivalent(patterns):
+				modeExact = false
+			default:
+				return boardEngine{}, false, nil
+			}
 		}
-		m, err := rustac.CompileAlternation(patterns, exact)
+		m, err := rustac.CompileAlternation(patterns, modeExact)
 		if err != nil {
 			return boardEngine{}, true, err
 		}
@@ -382,6 +469,321 @@ func TestBoardExactEntrants(t *testing.T) {
 			if err := e.bind(name, "each", c.haystack).agree(want); err != nil {
 				t.Errorf("each %q in %q: %v", c.patterns, c.haystack, err)
 			}
+		}
+	}
+}
+
+// simpleFoldSpellings returns the finite rune-wise fold language of a pattern.
+// Tests use only the short pinned literals; production never expands this set.
+func simpleFoldSpellings(pattern string) []string {
+	if pattern == "" || !utf8.ValidString(pattern) {
+		return nil
+	}
+	runes := []rune(pattern)
+	members := make([][]rune, len(runes))
+	for i, r := range runes {
+		members[i] = []rune{r}
+		for x := unicode.SimpleFold(r); x != r; x = unicode.SimpleFold(x) {
+			members[i] = append(members[i], x)
+		}
+	}
+	current := make([]rune, len(runes))
+	var spellings []string
+	var visit func(int)
+	visit = func(i int) {
+		if i == len(runes) {
+			spellings = append(spellings, string(current))
+			return
+		}
+		for _, r := range members[i] {
+			current[i] = r
+			visit(i + 1)
+		}
+	}
+	visit(0)
+	return spellings
+}
+
+// TestByteLanguageCertificatesCoverEverySimpleFoldOrbit checks that eligibility
+// follows complete Go simple-fold orbits for every Unicode scalar, not a sample
+// of current benchmark patterns.
+func TestByteLanguageCertificatesCoverEverySimpleFoldOrbit(t *testing.T) {
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		if !utf8.ValidRune(r) {
+			continue
+		}
+		allASCII, invariant := r < utf8.RuneSelf, true
+		for x := unicode.SimpleFold(r); x != r; x = unicode.SimpleFold(x) {
+			if x >= utf8.RuneSelf {
+				allASCII = false
+			}
+			invariant = false
+		}
+		pattern := string(r)
+		if got := rustacASCIICaselessEquivalent([]string{pattern}); got != allASCII {
+			t.Fatalf("RustAC ASCII certificate for %U = %t, want %t", r, got, allASCII)
+		}
+		if got := rustacExactEquivalent([]string{pattern}); got != invariant {
+			t.Fatalf("RustAC exact certificate for %U = %t, want %t", r, got, invariant)
+		}
+		wantVeloz := allASCII || r >= utf8.RuneSelf && invariant
+		if got := velozByteEquivalent(pattern); got != wantVeloz {
+			t.Fatalf("Veloz byte certificate for %U = %t, want %t", r, got, wantVeloz)
+		}
+	}
+	for _, pattern := range []string{"", string([]byte{0xff})} {
+		if rustacASCIICaselessEquivalent([]string{pattern}) || rustacExactEquivalent([]string{pattern}) || velozByteEquivalent(pattern) {
+			t.Errorf("invalid or empty pattern %q received a byte-language certificate", pattern)
+		}
+	}
+}
+
+// TestBoardCertifiedEntrantsAgree verifies the thirteen fixed omissions through
+// the ordinary board preparation path. It also exercises every spelling in
+// each added pattern's complete fold language against the independent oracle.
+func TestBoardCertifiedEntrantsAgree(t *testing.T) {
+	additional := map[string]map[string]bool{
+		"length/3-4/03":     {"rustac": true, "veloz": true},
+		"script/ascii/01":   {"rustac": true},
+		"case/ci/09":        {"rustac": true, "veloz": true},
+		"corpus/russian/02": {"rustac": true, "veloz": true},
+		"size/1MiB-4MiB/00": {"rustac": true, "veloz": true},
+		"op/indexfold/00":   {"rustac": true, "veloz": true},
+		"op/indexfold/04":   {"rustac": true, "veloz": true},
+	}
+	pinned, seen, pairs := board.Pinned(), map[string]bool{}, 0
+	for _, spec := range board.Cells() {
+		key := fmt.Sprintf("%s/%s/%02d", spec.Family, spec.Level, spec.Index)
+		want, ok := additional[key]
+		if !ok {
+			continue
+		}
+		cell := spec.Build()
+		if cell.ASCII || pinned[spec.Name()][0] != "utf8" {
+			t.Fatalf("%s is no longer the pinned UTF-8 tier", key)
+		}
+		prepared, err := prepareBoardCell(spec, pinned[spec.Name()][1])
+		if err != nil {
+			t.Fatalf("prepareBoardCell(%s): %v", key, err)
+		}
+		got := map[string]bool{}
+		for _, entrant := range prepared.entrants {
+			if entrant.name == "rustac" || entrant.name == "veloz" {
+				got[entrant.name] = true
+			}
+		}
+		wantVeloz := want["veloz"] && velozVectorBits() == 256
+		if got["rustac"] != want["rustac"] || got["veloz"] != wantVeloz {
+			t.Errorf("%s byte entrants = %v, want rustac=%t veloz=%t", key, got, want["rustac"], wantVeloz)
+		}
+		seen[key] = true
+		if !want["rustac"] {
+			continue
+		}
+		spellings := make([]string, 0)
+		for _, pattern := range cell.Patterns {
+			spellings = append(spellings, simpleFoldSpellings(pattern)...)
+		}
+		haystack := "中" + strings.Join(spellings, "\x00") + "中"
+		for _, name := range []string{"rustac", "veloz"} {
+			if !want[name] || name == "veloz" && !wantVeloz {
+				continue
+			}
+			engine, supported, err := boardEntrant(name, cell.Patterns, cell.ASCII, false)
+			if err != nil || !supported {
+				t.Fatalf("%s certificate for %s: supported=%t err=%v", name, key, supported, err)
+			}
+			for _, op := range []string{"find", "each"} {
+				wantHits := board.Matches(haystack, cell.Patterns, false)
+				if op != "each" && len(wantHits) > 1 {
+					wantHits = wantHits[:1]
+				}
+				if err := engine.bind(name, op, haystack).agree(wantHits); err != nil {
+					t.Errorf("%s %s full-language stream for %s: %v", name, op, key, err)
+				}
+				pairs++
+			}
+		}
+	}
+	if len(seen) != len(additional) {
+		t.Fatalf("prepared %d named cells, want %d", len(seen), len(additional))
+	}
+	if velozVectorBits() == 256 && pairs != 26 {
+		t.Fatalf("checked %d positive/full-language streams with AVX2 enabled, want 26", pairs)
+	}
+}
+
+func TestByteLanguageCertificatesRejectOutliers(t *testing.T) {
+	for _, pattern := range []string{"K", "k", "S", "s", "K", "ſ", "Σ", "σ", "ς", "Ж", "ж"} {
+		if rustacASCIICaselessEquivalent([]string{pattern}) || rustacExactEquivalent([]string{pattern}) || velozByteEquivalent(pattern) {
+			t.Errorf("unsafe complete language %q received a byte certificate", pattern)
+		}
+		for _, name := range []string{"rustac", "veloz"} {
+			_, supported, err := boardEntrant(name, []string{pattern}, false, false)
+			if err != nil || supported {
+				t.Errorf("%s admitted unsafe UTF-8 pattern %q: supported=%t err=%v", name, pattern, supported, err)
+			}
+		}
+	}
+	for _, c := range []struct{ pattern, variant string }{{"K", "K"}, {"S", "ſ"}} {
+		m, err := rustac.CompileAlternation([]string{c.pattern}, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, ok := m.Find(c.variant); ok || len(board.Matches(c.variant, []string{c.pattern}, false)) == 0 {
+			t.Errorf("%q vs %q no longer demonstrates the ASCII-byte mismatch", c.pattern, c.variant)
+		}
+		if at := veloz.IndexFold(c.variant, c.pattern); at >= 0 {
+			t.Errorf("Veloz unexpectedly matches %q in %q at %d", c.pattern, c.variant, at)
+		}
+	}
+	for _, c := range []struct{ pattern, variant string }{{"K", "k"}, {"ſ", "s"}} {
+		if _, err := rustac.CompileAlternation([]string{c.pattern}, false); err == nil {
+			t.Errorf("RustAC caseless constructor accepted non-ASCII %q", c.pattern)
+		}
+		m, err := rustac.CompileAlternation([]string{c.pattern}, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, ok := m.Find(c.variant); ok || len(board.Matches(c.variant, []string{c.pattern}, false)) == 0 {
+			t.Errorf("RustAC exact mode unexpectedly implements %q's fold language", c.pattern)
+		}
+	}
+	mixed := []string{"a", "中"}
+	if rustacASCIICaselessEquivalent(mixed) || rustacExactEquivalent(mixed) {
+		t.Fatal("mixed ASCII-cased/invariant set received a RustAC certificate")
+	}
+	if _, supported, err := boardEntrant("rustac", mixed, false, false); err != nil || supported {
+		t.Errorf("mixed RustAC set admitted: supported=%t err=%v", supported, err)
+	}
+	if _, supported, err := boardEntrant("veloz", mixed, false, false); err != nil || supported {
+		t.Errorf("multi-pattern Veloz set admitted: supported=%t err=%v", supported, err)
+	}
+	for _, spec := range board.Cells() {
+		if spec.Family != "count" || spec.Level != "2" || spec.Index != 1 {
+			continue
+		}
+		cell := spec.Build()
+		if rustacASCIICaselessEquivalent(cell.Patterns) || rustacExactEquivalent(cell.Patterns) {
+			t.Fatal("the mixed count/2/01 cell received an unchanged-mode RustAC certificate")
+		}
+		if _, supported, err := boardEntrant("rustac", cell.Patterns, cell.ASCII, false); err != nil || supported {
+			t.Errorf("the mixed count/2/01 cell was admitted: supported=%t err=%v", supported, err)
+		}
+		if _, err := rustac.CompileAlternation(cell.Patterns, false); err == nil {
+			t.Fatal("the mixed count/2/01 cell bypassed RustAC's native caseless guard")
+		}
+		return
+	}
+	t.Fatal("pinned mixed count/2/01 cell is missing")
+}
+
+// TestByteLanguageNativeOrderingAndWidths preserves the adapter-visible
+// ordering and source-byte contracts across the newly certified modes.
+func TestByteLanguageNativeOrderingAndWidths(t *testing.T) {
+	for _, c := range []struct {
+		patterns []string
+		haystack string
+	}{
+		{[]string{"ab", "a"}, "中AbA"},
+		{[]string{"a", "ab"}, "中AbA"},
+		{[]string{"A", "a"}, "中aA"},
+		{[]string{"aa", "a"}, "中aaaa"},
+	} {
+		engine, supported, err := boardEntrant("rustac", c.patterns, false, false)
+		if err != nil || !supported {
+			t.Fatalf("RustAC %q: supported=%t err=%v", c.patterns, supported, err)
+		}
+		wantFind := board.Matches(c.haystack, c.patterns, false)
+		if len(wantFind) > 1 {
+			wantFind = wantFind[:1]
+		}
+		if err := engine.bind("rustac", "find", c.haystack).agree(wantFind); err != nil {
+			t.Errorf("RustAC Find %q: %v", c.patterns, err)
+		}
+		if err := engine.bind("rustac", "each", c.haystack).agree(board.Matches(c.haystack, c.patterns, false)); err != nil {
+			t.Errorf("RustAC Each %q: %v", c.patterns, err)
+		}
+	}
+
+	invariant, supported, err := boardEntrant("rustac", []string{"中"}, false, false)
+	if err != nil || !supported || !rustacExactEquivalent([]string{"中"}) {
+		t.Fatalf("RustAC invariant exact mode: supported=%t err=%v", supported, err)
+	}
+	if err := invariant.bind("rustac", "each", "é中中").agree(board.Matches("é中中", []string{"中"}, false)); err != nil {
+		t.Errorf("RustAC invariant source widths: %v", err)
+	}
+
+	mixedNeedle := "a中"
+	if !velozByteEquivalent(mixedNeedle) {
+		t.Fatal("Veloz mixed ASCII/invariant language was not certified")
+	}
+	velozEngine, supported, err := boardEntrant("veloz", []string{mixedNeedle}, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if velozVectorBits() != 256 {
+		if supported {
+			t.Fatal("Veloz was active without its AVX2 availability gate")
+		}
+		return
+	}
+	if !supported {
+		t.Fatal("Veloz omitted a certified singleton with AVX2 available")
+	}
+	haystack := "éA中!a中"
+	if err := velozEngine.bind("veloz", "each", haystack).agree(board.Matches(haystack, []string{mixedNeedle}, false)); err != nil {
+		t.Errorf("Veloz multibyte-prefix source widths: %v", err)
+	}
+	stopped := false
+	if completed := velozEngine.each(haystack, func(int, int, int) bool { stopped = true; return false }); completed || !stopped {
+		t.Errorf("Veloz Each stop = completed %t, called %t", completed, stopped)
+	}
+}
+
+func TestVelozAVX2GateRejectsCertifiedLanguages(t *testing.T) {
+	available := cpu.X86.HasAVX2
+	defer func() { cpu.X86.HasAVX2 = available }()
+	cpu.X86.HasAVX2 = false
+	if velozVectorBits() != 0 {
+		t.Fatal("Veloz availability did not follow the disabled AVX2 feature")
+	}
+	for _, c := range []struct {
+		patterns []string
+		ascii    bool
+	}{
+		{[]string{"a"}, true},
+		{[]string{"a中"}, false},
+	} {
+		_, supported, err := boardEntrant("veloz", c.patterns, c.ascii, false)
+		if err != nil || supported {
+			t.Errorf("Veloz admitted %q without AVX2: supported=%t err=%v", c.patterns, supported, err)
+		}
+	}
+}
+
+func TestVelozByteCertificateRejectsBitFiveNearMisses(t *testing.T) {
+	for _, c := range []struct{ pattern, haystack string }{
+		{"A", "@"}, {"a", "`"}, {"[", "{"}, {"\\", "|"}, {"]", "}"}, {"^", "~"},
+	} {
+		if !velozByteEquivalent(c.pattern) {
+			t.Fatalf("ASCII byte pattern %q should be eligible", c.pattern)
+		}
+		engine, supported, err := boardEntrant("veloz", []string{c.pattern}, false, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if velozVectorBits() != 256 {
+			if supported {
+				t.Fatalf("Veloz was active without AVX2 on %q", c.pattern)
+			}
+			continue
+		}
+		if !supported {
+			t.Fatalf("Veloz omitted eligible ASCII pattern %q with AVX2", c.pattern)
+		}
+		if err := engine.bind("veloz", "find", c.haystack).agree(nil); err != nil {
+			t.Errorf("bit-five near miss %q in %q: %v", c.pattern, c.haystack, err)
 		}
 	}
 }

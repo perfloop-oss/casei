@@ -57,21 +57,44 @@ AGGREGATE_LIMIT = 1.0
 CELL_LIMIT = 1.10
 ALPHA = 0.05  # chance that compare fails a change with no effect
 
+# These unchanged byte APIs have complete-language certificates for the exact
+# pinned cells below. Keep this independent roster bound to both the full cell
+# name and its original digest; the Go adapter proves language eligibility
+# generically rather than dispatching on these rows.
+CERTIFIED_ADDITIONS = {
+    "length/3-4/03/n=1,len=3-4,size=206100,first=0.93,spacing=1024,op=indexfold,nonascii=100,corpus=code,case=ci": (
+        "d14bdde5717e5fdcbdc88723b67d6102fd588a4b0fad6a54c7aa7d155fa36739", frozenset(("rustac", "veloz"))),
+    "script/ascii/01/n=2,len=2-2,size=34069,first=1.00,spacing=65536,op=find,nonascii=0,corpus=russian,case=ci": (
+        "c0ad9092ca269ff1035c9b670cc67ce54c43b3411ab52a2c1febe3a6494de28c", frozenset(("rustac",))),
+    "case/ci/09/n=1,len=5-8,size=159739,first=0.26,spacing=0,op=indexfold,nonascii=0,corpus=russian,case=ci": (
+        "e8f564071557074f026ecfd6245f3400d7b6e237b0033a0c17b1262695ccfd8c", frozenset(("rustac", "veloz"))),
+    "corpus/russian/02/n=1,len=3-4,size=9564,first=0.63,spacing=65536,op=each,nonascii=50,corpus=russian,case=ci": (
+        "dd2d20fe424103a3e31e2188acaa2a362f6063a950d82621b5fdf8f86a8f2af2", frozenset(("rustac", "veloz"))),
+    "size/1MiB-4MiB/00/n=1,len=3-4,size=2451052,first=0.56,spacing=65536,op=indexfold,nonascii=100,corpus=code,case=ci": (
+        "f7ec6b5672828c02cc41a30805e8658f288526b61c8d8a08b95ffd8b21a1cdc4", frozenset(("rustac", "veloz"))),
+    "op/indexfold/00/n=1,len=5-8,size=11181,first=0.11,spacing=1024,op=indexfold,nonascii=0,corpus=russian,case=ci": (
+        "1f4fb21ec299a668b4c17d1011b8d8cc5a0181da64014bb89a41207c8fe4d415", frozenset(("rustac", "veloz"))),
+    "op/indexfold/04/n=1,len=2-2,size=22972,first=0.86,spacing=0,op=indexfold,nonascii=50,corpus=russian,case=ci": (
+        "0f92569e1b6edd3d3845eb3fdb4d29c70d7ce6343a72afbaaaeb80885d21a30a", frozenset(("rustac", "veloz"))),
+}
+
 
 class VerificationError(ValueError):
     pass
 
 
 def load_pinned(path=PINNED):
-    """Return (seed, {cell name: tier}) from the pinned cells file."""
-    seed, tiers = None, {}
+    """Return (seed, {cell name: (tier, digest)}) from the pinned cells file."""
+    seed, cells = None, {}
     for line in Path(path).read_text().splitlines():
         if line.startswith("seed="):
             seed = int(line[5:], 0)
         elif line and not line.startswith("#"):
-            name, tier, _ = line.split()
-            tiers[name] = tier
-    return seed, tiers
+            name, tier, digest = line.split()
+            if name in cells:
+                raise VerificationError(f"{path}: duplicate cell {name}")
+            cells[name] = (tier, digest)
+    return seed, cells
 
 
 def parse(path):
@@ -98,9 +121,8 @@ def parse(path):
     return header, cells
 
 
-def supported(name, tier):
-    """Return the entrants that support a cell, from field.yaml's tiers and,
-    on a case-sensitive cell, its exact_tier."""
+def supported(name, tier, digest):
+    """Return the expected entrants from native tiers and pinned certificates."""
     out = {"regexp", "pcre2", "rure", "vectorscan", "stringzilla"}
     if name.endswith(",case=cs"):
         return out | {"rustac"}
@@ -108,6 +130,12 @@ def supported(name, tier):
         out.add("rustac")
         if "/n=1," in name:
             out.add("veloz")
+        return out
+    certificate = CERTIFIED_ADDITIONS.get(name)
+    if certificate is not None:
+        pinned_digest, entrants = certificate
+        if tier == "utf8" and digest == pinned_digest:
+            out.update(entrants)
     return out
 
 
@@ -118,26 +146,34 @@ def measure(path, pinned=PINNED, family=None):
     pinned cells, casei's answers, and the timed field, with every ratio
     positive and finite."""
     header, cells = parse(path)
-    seed, tiers = load_pinned(pinned)
+    seed, pinned_cells = load_pinned(pinned)
     if family is not None:
-        if family not in {n.split("/")[0] for n in tiers}:
+        if family not in {n.split("/")[0] for n in pinned_cells}:
             raise VerificationError(f"--family {family!r} is not a pinned family")
-        tiers = {n: t for n, t in tiers.items() if n.split("/")[0] == family}
+        pinned_cells = {n: value for n, value in pinned_cells.items() if n.split("/")[0] == family}
     failures = [f"host: {k}={header.get(k)}, want {v}" for k, v in HOST.items() if header.get(k) != v]
+    default_pinned = Path(pinned).resolve() == PINNED.resolve()
+    for name, (digest, _) in CERTIFIED_ADDITIONS.items():
+        if family is not None and name.split("/")[0] != family:
+            continue
+        identity = pinned_cells.get(name)
+        if identity != ("utf8", digest) and (identity is not None or default_pinned):
+            failures.append(f"{name}: certified cell identity or digest changed; expected utf8 {digest}")
     if int(header["seed"], 0) != seed:
         failures.append(f"seed={header['seed']} is not the pinned seed {seed:#x}")
     if not cells:
         failures.append("the run has no cells")
-    if set(cells) != set(tiers):
-        failures.append(f"cells differ from {Path(pinned).name}: missing={sorted(set(tiers) - set(cells))}, "
-                        f"unexpected={sorted(set(cells) - set(tiers))}")
+    if set(cells) != set(pinned_cells):
+        failures.append(f"cells differ from {Path(pinned).name}: missing={sorted(set(pinned_cells) - set(cells))}, "
+                        f"unexpected={sorted(set(cells) - set(pinned_cells))}")
     xs = {}
     for name, cell in sorted(cells.items()):
         xs[name] = None
         if cell["candidate_supported"] != 1:
             failures.append(f"{name}: casei does not support this cell")
             continue
-        want = supported(name, tiers.get(name))
+        tier, digest = pinned_cells.get(name, (None, None))
+        want = supported(name, tier, digest)
         failures += [f"{name}: {e}_active={cell[f'{e}_active']:g}, want {int(e in want)}"
                      for e in ENTRANTS if cell[f"{e}_active"] != (e in want)]
         ratios = {e: cell[f"{e}_x"] for e in ENTRANTS if cell[f"{e}_active"] == 1}

@@ -13,14 +13,16 @@ sys.dont_write_bytecode = True
 import verify_board as verify
 
 
-SEED, TIERS = verify.load_pinned()
-NAMES = sorted(TIERS)
+SEED, PINNED_CELLS = verify.load_pinned()
+NAMES = sorted(PINNED_CELLS)
+TIERS = {name: tier for name, (tier, _) in PINNED_CELLS.items()}
+DIGESTS = {name: digest for name, (_, digest) in PINNED_CELLS.items()}
 HEADER = f"board: seed={SEED:#x} cells=200 vendor=GenuineIntel family=6 model=143 avx512f=1 avx512bw=1 avx512vbmi=1\n"
 
 
 def line(name, ratio=0.5, supported=1, drop=None, extra=None, faster=None):
     """A cell where every supporting entrant has ratio, except faster's 2x."""
-    active = verify.supported(name, TIERS[name]) - {drop} | ({extra} - {None})
+    active = verify.supported(name, TIERS[name], DIGESTS[name]) - {drop} | ({extra} - {None})
     if not supported:
         active = set()
     metrics = " ".join(
@@ -82,21 +84,95 @@ class VerifyBoardTest(unittest.TestCase):
         self.assertFails(transcript(**{family("count")[3]: {"drop": "rure"}}), "rure_active=0, want 1")
 
     def test_tier_comes_from_cells_txt(self):
-        name = next(n for n in NAMES if TIERS[n] == "utf8" and n.endswith(",case=ci"))
+        name = next(n for n in NAMES if TIERS[n] == "utf8" and n.endswith(",case=ci")
+                    and n not in verify.CERTIFIED_ADDITIONS)
         self.assertFails(transcript(**{name: {"extra": "rustac"}}), "rustac_active=1, want 0")
         name = next(n for n in NAMES if TIERS[n] == "ascii" and n.endswith(",case=ci"))
         self.assertFails(transcript(**{name: {"drop": "rustac"}}), "rustac_active=0, want 1")
 
+    def test_certificates_bind_exact_names_digests_and_complete_roster(self):
+        self.assertEqual(len(NAMES), 200)
+        self.assertEqual(len(verify.CERTIFIED_ADDITIONS), 7)
+        self.assertEqual(sum(len(entrants) for _, entrants in verify.CERTIFIED_ADDITIONS.values()), 13)
+        for name, (digest, entrants) in verify.CERTIFIED_ADDITIONS.items():
+            self.assertEqual(PINNED_CELLS[name], ("utf8", digest))
+            self.assertEqual(verify.supported(name, TIERS[name], DIGESTS[name]) & {"rustac", "veloz"}, set(entrants))
+            self.assertFalse(verify.supported(name, TIERS[name], "0" * 64) & {"rustac", "veloz"})
+
+        folded = [name for name in NAMES if name.endswith(",case=ci")]
+        exact = [name for name in NAMES if name.endswith(",case=cs")]
+        self.assertEqual(len(folded), 112)
+        self.assertEqual(len(exact), 88)
+        old_folded = sum(len(verify.supported(name, TIERS[name], "0" * 64)) for name in folded)
+        new_folded = sum(len(verify.supported(name, TIERS[name], DIGESTS[name])) for name in folded)
+        old_all = sum(len(verify.supported(name, TIERS[name], "0" * 64)) for name in NAMES)
+        new_all = sum(len(verify.supported(name, TIERS[name], DIGESTS[name])) for name in NAMES)
+        self.assertEqual((old_folded, new_folded), (604, 617))
+        self.assertEqual((old_all, new_all), (1132, 1145))
+        family_sizes = {family: sum(name.split("/")[0] == family for name in NAMES)
+                        for family in {name.split("/")[0] for name in NAMES}}
+        self.assertEqual(family_sizes, {
+            "count": 28, "length": 28, "script": 24, "case": 24,
+            "corpus": 24, "density": 24, "size": 24, "op": 24,
+        })
+
+    def test_verifier_rejects_changed_certified_digest(self):
+        name, (digest, _) = next(iter(verify.CERTIFIED_ADDITIONS.items()))
+        with tempfile.TemporaryDirectory() as directory:
+            pinned = Path(directory) / "cells.txt"
+            rows = verify.PINNED.read_text().splitlines()
+            changed = []
+            for row in rows:
+                if row.startswith(name + " "):
+                    fields = row.split()
+                    self.assertEqual(fields[2], digest)
+                    fields[2] = "0" * 64
+                    row = " ".join(fields)
+                changed.append(row)
+            pinned.write_text("\n".join(changed) + "\n")
+            transcript_path = Path(directory) / "board.txt"
+            transcript_path.write_text(transcript())
+            _, _, failures = verify.measure(transcript_path, pinned=pinned)
+        self.assertTrue(any(f"{name}: certified cell identity or digest changed" in f for f in failures), failures)
+
+    def test_every_certified_slot_is_required(self):
+        for name, (_, entrants) in verify.CERTIFIED_ADDITIONS.items():
+            for entrant in entrants:
+                with self.subTest(cell=name, entrant=entrant):
+                    self.assertFails(transcript(**{name: {"drop": entrant}}),
+                                     f"{name}: {entrant}_active=0, want 1")
+
+    def test_every_certified_ratio_must_be_positive_finite(self):
+        valid = transcript()
+        for name, (_, entrants) in verify.CERTIFIED_ADDITIONS.items():
+            original = line(name)
+            for entrant in entrants:
+                with self.subTest(cell=name, entrant=entrant):
+                    corrupted = original.replace(f"0.5 {entrant}_x", f"nan {entrant}_x")
+                    self.assertNotEqual(corrupted, original)
+                    self.assertFails(valid.replace(original, corrupted),
+                                     f"{name}: {entrant}_x=nan is not a positive finite ratio")
+
+    def test_added_entrant_participates_in_largest_cell_ratio(self):
+        name = next(iter(verify.CERTIFIED_ADDITIONS))
+        self.assertFails(transcript(**{name: {"ratio": 0.6, "faster": "rustac"}}),
+                         f"{name}: x_vs_best=1.2000 is outside (0, 1.1]")
+
+    def test_unsupported_veloz_extra_on_multiliteral_cell_fails(self):
+        name = next(n for n in NAMES if n in verify.CERTIFIED_ADDITIONS and "veloz" not in verify.CERTIFIED_ADDITIONS[n][1])
+        self.assertFails(transcript(**{name: {"extra": "veloz"}}),
+                         f"{name}: veloz_active=1, want 0")
+
     def test_case_sensitive_cells_need_the_exact_field(self):
         ascii = next(n for n in family("case/cs") if TIERS[n] == "ascii")
         utf8 = next(n for n in family("case/cs") if TIERS[n] == "utf8")
-        self.assertEqual(verify.supported(utf8, "utf8"), set(verify.ENTRANTS) - {"veloz"})
+        self.assertEqual(verify.supported(utf8, "utf8", DIGESTS[utf8]), set(verify.ENTRANTS) - {"veloz"})
         self.assertFails(transcript(**{utf8: {"drop": "rustac"}}), f"{utf8}: rustac_active=0, want 1")
         self.assertFails(transcript(**{ascii: {"drop": "stringzilla"}}), f"{ascii}: stringzilla_active=0, want 1")
         # veloz has no exact mode, even on the one-pattern ASCII cells it races
         # when folding.
         single = next(n for n in NAMES if "/n=1," in n and n.endswith(",case=cs") and TIERS[n] == "ascii")
-        self.assertEqual(verify.supported(single, "ascii"), set(verify.ENTRANTS) - {"veloz"})
+        self.assertEqual(verify.supported(single, "ascii", DIGESTS[single]), set(verify.ENTRANTS) - {"veloz"})
         self.assertFails(transcript(**{single: {"extra": "veloz"}}), f"{single}: veloz_active=1, want 0")
 
     def test_rejects_unsupported_case_sensitive_cells(self):
