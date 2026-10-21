@@ -117,6 +117,9 @@ func foldWithOrigin(s string) (string, []int32) {
 	var buf [utf8.UTFMax]byte
 	for i := 0; i < len(s); {
 		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && size == 1 {
+			panic("board fold needs valid UTF-8")
+		}
 		n := utf8.EncodeRune(buf[:], FoldKey(r))
 		b.Write(buf[:n])
 		for range n {

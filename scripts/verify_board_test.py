@@ -15,18 +15,39 @@ import verify_board as verify
 
 SEED, TIERS = verify.load_pinned()
 NAMES = sorted(TIERS)
-HEADER = f"board: seed={SEED:#x} cells=200 vendor=GenuineIntel family=6 model=143 avx512f=1 avx512bw=1 avx512vbmi=1\n"
+HEADER = f"board: seed={SEED:#x} cells=200 vendor=GenuineIntel family=6 model=143 avx2=1 avx512f=1 avx512bw=1 avx512vbmi=1\n"
 
 
-def line(name, ratio=0.5, supported=1, drop=None, extra=None, faster=None):
+def expected_supported(name, tier):
+    """Independent fixture roster from the frozen board contract."""
+    out = {"regexp", "pcre2", "rure", "vectorscan", "stringzilla"}
+    if name.endswith(",case=cs"):
+        return out | {"rustac"}
+    out.add("veloz")
+    if tier == "ascii":
+        out.add("rustac")
+    return out
+
+
+def expected_mode(name, tier, active):
+    if "veloz" not in active or name.endswith(",case=cs"):
+        return 0, 0
+    if tier == "ascii" and "/n=1," in name:
+        return 1, 0
+    return 0, 1
+
+
+def line(name, ratio=0.5, supported=1, drop=None, extra=None, faster=None, mode=None):
     """A cell where every supporting entrant has ratio, except faster's 2x."""
-    active = verify.supported(name, TIERS[name]) - {drop} | ({extra} - {None})
+    active = expected_supported(name, TIERS[name]) - {drop} | ({extra} - {None})
     if not supported:
         active = set()
+    direct, view = expected_mode(name, TIERS[name], active) if mode is None else mode
     metrics = " ".join(
         f"{int(e in active)} {e}_active {(2 * ratio if e == faster else ratio) if e in active else 0} {e}_x"
         for e in verify.ENTRANTS
     )
+    metrics += f" {direct} veloz_direct_active {view} veloz_view_active"
     return f"BenchmarkBoard/{name}-8 1 1000 ns/op {supported} candidate_supported {metrics}\n"
 
 
@@ -52,6 +73,31 @@ class VerifyBoardTest(unittest.TestCase):
     def test_accepts_a_winning_board(self):
         self.assertEqual(len(NAMES), 200)
         self.assertEqual(self.verify(transcript())[1], [])
+
+    def test_support_roster_covers_all_original_folded_cells(self):
+        folded = [n for n in NAMES if not n.endswith(",case=cs")]
+        exact = [n for n in NAMES if n.endswith(",case=cs")]
+        self.assertEqual((len(folded), len(exact)), (112, 88))
+        self.assertEqual({n.split(",op=")[1].split(",")[0] for n in folded}, {"find", "each", "indexfold"})
+        for name in NAMES:
+            self.assertEqual(verify.supported(name, TIERS[name]), expected_supported(name, TIERS[name]), name)
+
+    def test_verifier_rejects_a_missing_veloz_cell_for_each_operation(self):
+        for op in ("find", "each", "indexfold"):
+            name = next(n for n in NAMES if f",op={op}," in n and not n.endswith(",case=cs"))
+            self.assertFails(transcript(**{name: {"drop": "veloz"}}), f"{name}: veloz_active=0, want 1")
+
+    def test_verifier_rejects_corrupt_veloz_ratios(self):
+        name = next(n for n in NAMES if TIERS[n] == "utf8" and not n.endswith(",case=cs"))
+        for bad in ("-0.5", "nan", "inf"):
+            text = transcript().replace(line(name), line(name).replace("0.5 veloz_x", f"{bad} veloz_x"))
+            self.assertFails(text, f"{name}: veloz_x={bad} is not a positive finite ratio")
+
+    def test_verifier_rejects_wrong_veloz_modes(self):
+        direct = next(n for n in NAMES if TIERS[n] == "ascii" and "/n=1," in n and not n.endswith(",case=cs"))
+        view = next(n for n in NAMES if not n.endswith(",case=cs") and expected_mode(n, TIERS[n], expected_supported(n, TIERS[n])) == (0, 1))
+        self.assertFails(transcript(**{direct: {"mode": (0, 1)}}), f"{direct}: veloz_direct_active=0, want 1")
+        self.assertFails(transcript(**{view: {"mode": (1, 0)}}), f"{view}: veloz_view_active=0, want 1")
 
     # A broken aggregate: every cell within 1.10, the family's mean at 1.0.
     def test_rejects_family_aggregate_at_one(self):
@@ -90,13 +136,13 @@ class VerifyBoardTest(unittest.TestCase):
     def test_case_sensitive_cells_need_the_exact_field(self):
         ascii = next(n for n in family("case/cs") if TIERS[n] == "ascii")
         utf8 = next(n for n in family("case/cs") if TIERS[n] == "utf8")
-        self.assertEqual(verify.supported(utf8, "utf8"), set(verify.ENTRANTS) - {"veloz"})
+        self.assertEqual(expected_supported(utf8, "utf8"), set(verify.ENTRANTS) - {"veloz"})
         self.assertFails(transcript(**{utf8: {"drop": "rustac"}}), f"{utf8}: rustac_active=0, want 1")
         self.assertFails(transcript(**{ascii: {"drop": "stringzilla"}}), f"{ascii}: stringzilla_active=0, want 1")
         # veloz has no exact mode, even on the one-pattern ASCII cells it races
         # when folding.
         single = next(n for n in NAMES if "/n=1," in n and n.endswith(",case=cs") and TIERS[n] == "ascii")
-        self.assertEqual(verify.supported(single, "ascii"), set(verify.ENTRANTS) - {"veloz"})
+        self.assertEqual(expected_supported(single, "ascii"), set(verify.ENTRANTS) - {"veloz"})
         self.assertFails(transcript(**{single: {"extra": "veloz"}}), f"{single}: veloz_active=1, want 0")
 
     def test_rejects_unsupported_case_sensitive_cells(self):
@@ -113,6 +159,7 @@ class VerifyBoardTest(unittest.TestCase):
 
     def test_rejects_wrong_host(self):
         self.assertFails(transcript(header=HEADER.replace("model=143", "model=106")), "host: model=106")
+        self.assertFails(transcript(header=HEADER.replace("avx2=1", "avx2=0")), "host: avx2=0, want 1")
 
 
     def test_verifies_one_family(self):

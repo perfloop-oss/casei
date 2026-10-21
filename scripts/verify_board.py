@@ -8,8 +8,10 @@
   full board is the acceptance check.
 - casei answers every cell, case-sensitive cells included, and every pinned
   entrant that supports a cell was timed: on a case-sensitive cell, every
-  entrant with an exact mode. (BenchmarkBoard fails a cell outright on any
-  wrong answer, so a wrong answer leaves its cell out of the run.)
+  entrant with an exact mode. Veloz is required on every folded cell; its mode
+  flags distinguish the direct ASCII-singleton route from the translated view.
+  (BenchmarkBoard fails a cell outright on any wrong answer, so a wrong answer
+  leaves its cell out of the run.)
 - Every timed entrant's ratio is positive and finite. A cell's x_vs_best is
   its largest entrant ratio, casei's time over that of the fastest entrant; no
   cell is above 1.10.
@@ -51,8 +53,9 @@ import sys
 
 PINNED = Path(__file__).resolve().parent.parent / "arena" / "board" / "cells.txt"
 ENTRANTS = ("regexp", "pcre2", "rure", "vectorscan", "stringzilla", "veloz", "rustac")
+VELOZ_MODES = ("veloz_direct_active", "veloz_view_active")
 HOST = {"vendor": "GenuineIntel", "family": "6", "model": "143",
-        "avx512f": "1", "avx512bw": "1", "avx512vbmi": "1"}
+        "avx2": "1", "avx512f": "1", "avx512bw": "1", "avx512vbmi": "1"}
 AGGREGATE_LIMIT = 1.0
 CELL_LIMIT = 1.10
 ALPHA = 0.05  # chance that compare fails a change with no effect
@@ -90,7 +93,7 @@ def parse(path):
             values = dict(zip(fields[3::2], fields[2::2]))  # unit -> value, after the name and N
             try:
                 cells[name] = {u: float(values[u]) for u in
-                               ("candidate_supported", *(f"{e}_{m}" for e in ENTRANTS for m in ("active", "x")))}
+                               ("candidate_supported", *(f"{e}_{m}" for e in ENTRANTS for m in ("active", "x")), *VELOZ_MODES)}
             except (KeyError, ValueError) as err:
                 raise VerificationError(f"{path}:{number}: missing or invalid metric {err}") from err
     if header is None or "seed" not in header:
@@ -99,16 +102,23 @@ def parse(path):
 
 
 def supported(name, tier):
-    """Return the entrants that support a cell, from field.yaml's tiers and,
-    on a case-sensitive cell, its exact_tier."""
+    """Return BenchmarkBoard's roster from field.yaml tier/board_tier metadata."""
     out = {"regexp", "pcre2", "rure", "vectorscan", "stringzilla"}
     if name.endswith(",case=cs"):
         return out | {"rustac"}
+    out.add("veloz")
     if tier == "ascii":
         out.add("rustac")
-        if "/n=1," in name:
-            out.add("veloz")
     return out
+
+
+def expected_veloz_modes(name, tier):
+    """Return the existing direct ASCII-singleton or translated-view mode."""
+    if name.endswith(",case=cs"):
+        return 0, 0
+    if tier == "ascii" and "/n=1," in name:
+        return 1, 0
+    return 0, 1
 
 
 def measure(path, pinned=PINNED, family=None):
@@ -137,9 +147,18 @@ def measure(path, pinned=PINNED, family=None):
         if cell["candidate_supported"] != 1:
             failures.append(f"{name}: casei does not support this cell")
             continue
-        want = supported(name, tiers.get(name))
+        tier = tiers.get(name)
+        want = supported(name, tier)
         failures += [f"{name}: {e}_active={cell[f'{e}_active']:g}, want {int(e in want)}"
                      for e in ENTRANTS if cell[f"{e}_active"] != (e in want)]
+        direct, view = (cell[metric] for metric in VELOZ_MODES)
+        want_direct, want_view = expected_veloz_modes(name, tier)
+        if direct != want_direct:
+            failures.append(f"{name}: veloz_direct_active={direct:g}, want {want_direct}")
+        if view != want_view:
+            failures.append(f"{name}: veloz_view_active={view:g}, want {want_view}")
+        if cell["veloz_active"] != direct + view:
+            failures.append(f"{name}: veloz_active={cell['veloz_active']:g}, but direct/view modes are {direct:g}/{view:g}")
         ratios = {e: cell[f"{e}_x"] for e in ENTRANTS if cell[f"{e}_active"] == 1}
         failures += [f"{name}: {e}_x={r:g} is not a positive finite ratio"
                      for e, r in ratios.items() if not 0 < r < math.inf]
