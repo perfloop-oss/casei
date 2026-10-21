@@ -117,7 +117,7 @@ func prepareBoardCell(spec board.Spec, digest string) (*boardCell, error) {
 		}
 	}
 	for _, r := range runs {
-		if err := r.agree(want); err != nil {
+		if err := r.agree(want, spec.Op == "each"); err != nil {
 			return nil, err
 		}
 	}
@@ -125,15 +125,18 @@ func prepareBoardCell(spec board.Spec, digest string) (*boardCell, error) {
 }
 
 // agree runs r once and holds its hits to the oracle's.
-func (r boardRun) agree(want []board.Hit) error {
+func (r boardRun) agree(want []board.Hit, requireWidths bool) error {
 	var got []board.Hit
 	r.scan(func(h board.Hit) bool { got = append(got, h); return true })
 	if len(got) != len(want) {
 		return fmt.Errorf("%s gives %d matches, oracle %d", r.name, len(got), len(want))
 	}
 	for i, h := range got {
-		if r.name == "veloz" && (h.Pattern < 0 || h.Width < 0) {
-			return fmt.Errorf("Veloz match %d omits an original pattern ID or source width: %+v", i, h)
+		if r.name == "veloz" && h.Pattern < 0 {
+			return fmt.Errorf("Veloz match %d omits its original pattern ID: %+v", i, h)
+		}
+		if requireWidths && h.Width < 0 {
+			return fmt.Errorf("%s match %d omits its source width: %+v", r.name, i, h)
 		}
 		if w := want[i]; h.Start != w.Start || h.Pattern >= 0 && h.Pattern != w.Pattern || h.Width >= 0 && h.Width != w.Width {
 			return fmt.Errorf("%s match %d is %+v, oracle %+v", r.name, i, h, w)
@@ -262,14 +265,7 @@ func boardEntrant(name string, patterns []string, asciiTier, exact bool) (boardE
 				start := veloz.IndexFold(h, needle)
 				return start, 0, start >= 0
 			}
-			findHit := func(h string) (board.Hit, bool) {
-				start := veloz.IndexFold(h, needle)
-				if start < 0 {
-					return board.Hit{}, false
-				}
-				return board.Hit{Start: start, Pattern: 0, Width: len(needle)}, true
-			}
-			return boardEngine{mode: "direct", find: find, findHit: findHit, each: func(h string, yield func(int, int, int) bool) bool {
+			return boardEngine{mode: "direct", find: find, each: func(h string, yield func(int, int, int) bool) bool {
 				for at := 0; ; {
 					start, _, ok := find(h[at:])
 					if !ok {
@@ -436,7 +432,7 @@ func TestVelozBoardEntrantCoversOriginalFoldedCells(t *testing.T) {
 		if spec.Op != "each" && len(want) > 1 {
 			want = want[:1]
 		}
-		if err := engine.bind("veloz", spec.Op, cell.Haystack).agree(want); err != nil {
+		if err := engine.bind("veloz", spec.Op, cell.Haystack).agree(want, spec.Op == "each"); err != nil {
 			t.Errorf("%s: %v", spec.Name(), err)
 		}
 	}
@@ -502,10 +498,10 @@ func TestBoardExactEntrants(t *testing.T) {
 			if !supported {
 				continue
 			}
-			if err := e.bind(name, "find", c.haystack).agree(want[:1]); err != nil {
+			if err := e.bind(name, "find", c.haystack).agree(want[:1], false); err != nil {
 				t.Errorf("find %q in %q: %v", c.patterns, c.haystack, err)
 			}
-			if err := e.bind(name, "each", c.haystack).agree(want); err != nil {
+			if err := e.bind(name, "each", c.haystack).agree(want, true); err != nil {
 				t.Errorf("each %q in %q: %v", c.patterns, c.haystack, err)
 			}
 		}
