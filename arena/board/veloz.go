@@ -132,9 +132,5 @@ func (view *VelozView) project(canonical string, origin []int32, start, pattern 
 	if sourceStart < 0 || sourceEnd < sourceStart {
 		panic("Veloz view source-offset map is not monotone at a match")
 	}
-	return Hit{Start: sourceStart, Pattern: pattern, Width: sourceEnd - sourceStart}
-}
-
-func canonicalBoundary(canonical string, at int) bool {
-	return at >= 0 && at <= len(canonical) && (at == len(canonical) || utf8.RuneStart(canonical[at]))
+	return projectFoldedOffsets(sourceStart, sourceEnd, pattern)
 }

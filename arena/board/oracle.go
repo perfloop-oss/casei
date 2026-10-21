@@ -1,6 +1,7 @@
 package board
 
 import (
+	"fmt"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -106,6 +107,53 @@ func Matches(haystack string, patterns []string, sensitive bool) []Hit {
 		at = end
 	}
 	return hits
+}
+
+const maxOriginOffset = uint64(^uint32(0) >> 1)
+
+func checkedOriginLength(length int) error {
+	if length < 0 || uint64(length) > maxOriginOffset || length == int(^uint(0)>>1) {
+		return fmt.Errorf("source length %d exceeds the checked int32 origin-map range", length)
+	}
+	return nil
+}
+
+// foldWithOriginChecked validates the input and int32 source-offset range
+// before using the shared canonicalizer and origin-map builder. RustAC's arena
+// view needs errors rather than wrapped offsets; existing oracle and Veloz
+// callers keep using foldWithOrigin for their pinned valid inputs.
+func foldWithOriginChecked(s string) (string, []int32, error) {
+	if !utf8.ValidString(s) {
+		return "", nil, fmt.Errorf("origin map requires valid UTF-8")
+	}
+	if err := checkedOriginLength(len(s)); err != nil {
+		return "", nil, err
+	}
+	text, origin := foldWithOrigin(s)
+	if len(text) > len(s) || len(origin) != len(text)+1 || origin[len(origin)-1] != int32(len(s)) {
+		return "", nil, fmt.Errorf("canonical text/map lengths %d/%d do not cover source length %d", len(text), len(origin), len(s))
+	}
+	return text, origin, nil
+}
+
+// validCanonicalSpan checks that a canonical span and its origin map have
+// rune-aligned bounds. Both timed adapters use the same boundary rule.
+func validCanonicalSpan(canonical string, origin []int32, start, end int) bool {
+	if len(origin) != len(canonical)+1 || start < 0 || end < start || end >= len(origin) {
+		return false
+	}
+	return (start == len(canonical) || utf8.RuneStart(canonical[start])) &&
+		(end == len(canonical) || utf8.RuneStart(canonical[end]))
+}
+
+// projectFoldedOffsets converts the shared origin map's source boundaries into
+// a Hit. Callers validate the offsets before using this small mapping helper.
+func projectFoldedOffsets(sourceStart, sourceEnd int, pattern int) Hit {
+	return Hit{Start: sourceStart, Pattern: pattern, Width: sourceEnd - sourceStart}
+}
+
+func canonicalBoundary(s string, at int) bool {
+	return at >= 0 && at <= len(s) && (at == len(s) || utf8.RuneStart(s[at]))
 }
 
 // foldWithOrigin folds s and records, for each folded byte, the offset in s of

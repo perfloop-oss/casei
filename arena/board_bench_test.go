@@ -32,15 +32,18 @@ import (
 var boardEntrants = []string{"regexp", "pcre2", "rure", "vectorscan", "stringzilla", "veloz", "rustac"}
 
 // BenchmarkBoard reports, per cell, each supporting entrant's paired ratio:
-// casei's time over the entrant's. The Veloz mode flags distinguish the
-// existing direct ASCII-singleton route from the translated simple-fold view.
-// Run it with -benchtime 1x; the pairing does the timing.
+// casei's time over the entrant's. Mode flags identify direct and translated
+// Veloz and RustAC routes. Run it with -benchtime 1x; the pairing does the timing.
 func BenchmarkBoard(b *testing.B) {
 	cells, pinned := board.Cells(), board.Pinned()
 	fmt.Printf("board: seed=%#x cells=%d %s\n", board.Seed, len(cells), boardHost())
 	for _, spec := range cells {
 		b.Run(spec.Name(), func(b *testing.B) {
-			metrics := map[string]float64{"candidate_supported": 0}
+			metrics := map[string]float64{
+				"candidate_supported":  0,
+				"rustac_direct_active": 0,
+				"rustac_view_active":   0,
+			}
 			for _, name := range boardEntrants {
 				metrics[name+"_active"], metrics[name+"_x"] = 0, 0
 			}
@@ -54,10 +57,14 @@ func BenchmarkBoard(b *testing.B) {
 			if err != nil {
 				b.Fatalf("cell %s: %v", spec.Name(), err)
 			}
+			defer c.close()
 			for _, e := range c.entrants {
 				metrics[e.name+"_active"], metrics[e.name+"_x"] = 1, pairedRatio(c.candidate.run, e.run)
 				if e.name == "veloz" && c.velozMode != "" {
 					metrics["veloz_"+c.velozMode+"_active"] = 1
+				}
+				if e.name == "rustac" && c.rustacMode != "" {
+					metrics["rustac_"+c.rustacMode+"_active"] = 1
 				}
 			}
 			for b.Loop() {
@@ -71,19 +78,66 @@ func BenchmarkBoard(b *testing.B) {
 // boardCell is a built cell with casei and every supporting entrant bound to
 // the cell's operation.
 type boardCell struct {
-	candidate boardRun
-	entrants  []boardRun
-	velozMode string
+	candidate  boardRun
+	entrants   []boardRun
+	releases   []func()
+	rustacMode string
+	velozMode  string
 }
 
-// boardRun is one implementation's operation on the cell. scan reports each
-// hit; a Pattern or Width of -1 is one the implementation does not report.
+func (c *boardCell) close() {
+	if c == nil {
+		return
+	}
+	for i, release := range c.releases {
+		if release != nil {
+			release()
+			c.releases[i] = nil
+		}
+	}
+}
+
+// boardRun is one implementation's timed operation on the cell. scan reports
+// each hit; a Pattern or Width of -1 is one the implementation does not report.
 type boardRun struct {
 	name string
 	scan func(visit func(board.Hit) bool)
 }
 
 func (r boardRun) run() { r.scan(func(board.Hit) bool { matcherSink++; return true }) }
+
+// boardBinding carries strict agreement metadata and error-aware preflight.
+// Keep it out of boardRun, whose value receiver is on the timed path.
+type boardBinding struct {
+	run           boardRun
+	scanErr       func(visit func(board.Hit) bool) error
+	strict        bool
+	requireWidths bool
+}
+
+func (r boardBinding) agree(want []board.Hit) error {
+	var got []board.Hit
+	visit := func(h board.Hit) bool { got = append(got, h); return true }
+	if r.scanErr != nil {
+		if err := r.scanErr(visit); err != nil {
+			return fmt.Errorf("%s scan: %w", r.run.name, err)
+		}
+	} else {
+		r.run.scan(visit)
+	}
+	if len(got) != len(want) {
+		return fmt.Errorf("%s gives %d matches, oracle %d", r.run.name, len(got), len(want))
+	}
+	for i, h := range got {
+		w := want[i]
+		patternMismatch := r.strict && h.Pattern != w.Pattern || !r.strict && h.Pattern >= 0 && h.Pattern != w.Pattern
+		widthMismatch := r.requireWidths && h.Width < 0 || h.Width >= 0 && h.Width != w.Width
+		if h.Start != w.Start || patternMismatch || widthMismatch {
+			return fmt.Errorf("%s match %d is %+v, oracle %+v", r.run.name, i, h, w)
+		}
+	}
+	return nil
+}
 
 // prepareBoardCell builds the cell, checks it against its pinned digest, and
 // holds casei and every supporting entrant to the oracle before any timing, so
@@ -102,47 +156,44 @@ func prepareBoardCell(spec board.Spec, digest string) (*boardCell, error) {
 		want = want[:1]
 	}
 	c := &boardCell{candidate: boardCandidate(spec, cell)}
-	runs := []boardRun{c.candidate}
+	success := false
+	defer func() {
+		if !success {
+			c.close()
+		}
+	}()
+	runs := []boardBinding{{run: c.candidate, requireWidths: spec.Op == "each"}}
 	for _, name := range boardEntrants {
-		e, supported, err := boardEntrant(name, cell.Patterns, cell.ASCII, spec.Sensitive)
+		var e boardEngine
+		var supported bool
+		var err error
+		e, supported, err = boardEntrant(name, cell.Patterns, cell.ASCII, spec.Sensitive)
 		if err != nil {
-			return nil, fmt.Errorf("%s supports the cell but cannot compile it: %v", name, err)
+			return nil, fmt.Errorf("%s supports the cell but cannot compile it: %w", name, err)
+		}
+		if name == "rustac" {
+			c.rustacMode = e.mode
+		}
+		if e.release != nil {
+			c.releases = append(c.releases, e.release)
+			e.release = nil
 		}
 		if supported {
 			if name == "veloz" {
 				c.velozMode = e.mode
 			}
-			c.entrants = append(c.entrants, e.bind(name, spec.Op, cell.Haystack))
-			runs = append(runs, c.entrants[len(c.entrants)-1])
+			binding := e.bind(name, spec.Op, cell.Haystack)
+			c.entrants = append(c.entrants, binding.run)
+			runs = append(runs, binding)
 		}
 	}
 	for _, r := range runs {
-		if err := r.agree(want, spec.Op == "each"); err != nil {
+		if err := r.agree(want); err != nil {
 			return nil, err
 		}
 	}
+	success = true
 	return c, nil
-}
-
-// agree runs r once and holds its hits to the oracle's.
-func (r boardRun) agree(want []board.Hit, requireWidths bool) error {
-	var got []board.Hit
-	r.scan(func(h board.Hit) bool { got = append(got, h); return true })
-	if len(got) != len(want) {
-		return fmt.Errorf("%s gives %d matches, oracle %d", r.name, len(got), len(want))
-	}
-	for i, h := range got {
-		if r.name == "veloz" && h.Pattern < 0 {
-			return fmt.Errorf("Veloz match %d omits its original pattern ID: %+v", i, h)
-		}
-		if requireWidths && h.Width < 0 {
-			return fmt.Errorf("%s match %d omits its source width: %+v", r.name, i, h)
-		}
-		if w := want[i]; h.Start != w.Start || h.Pattern >= 0 && h.Pattern != w.Pattern || h.Width >= 0 && h.Width != w.Width {
-			return fmt.Errorf("%s match %d is %+v, oracle %+v", r.name, i, h, w)
-		}
-	}
-	return nil
 }
 
 // boardCandidate binds casei to the cell's operation: NewExactMatcher on a
@@ -179,13 +230,34 @@ func boardCandidate(spec board.Spec, cell board.Cell) boardRun {
 
 // boardEngine is an entrant compiled for one pattern set: find answers Find,
 // and each is the engine's own enumeration of consecutive non-overlapping
-// matches, with the matching loop on the engine's side. findHit is optional for
-// entrants, such as the Veloz view, that also report a projected source width.
+// matches, with the matching loop on the engine's side. findHit and
+// findWithWidth preserve projected spans from translated adapters.
 type boardEngine struct {
-	mode    string
-	find    func(h string) (start, pattern int, ok bool)
-	findHit func(h string) (board.Hit, bool)
-	each    func(h string, yield func(start, pattern, width int) bool) bool
+	mode          string
+	find          func(h string) (start, pattern int, ok bool)
+	findHit       func(h string) (board.Hit, bool)
+	each          func(h string, yield func(start, pattern, width int) bool) bool
+	findWithWidth func(h string) (start, pattern, width int, ok bool, err error)
+	eachErr       func(h string, yield func(start, pattern, width int) bool) (complete bool, err error)
+	strict        bool
+	release       func()
+}
+
+func rustacViewEngine(view *board.RustACView) boardEngine {
+	return boardEngine{
+		mode:          "view",
+		findWithWidth: view.Find,
+		eachErr:       view.Each,
+		strict:        true,
+		release:       view.Close,
+	}
+}
+
+func (e *boardEngine) close() {
+	if e != nil && e.release != nil {
+		e.release()
+		e.release = nil
+	}
 }
 
 // boardEntrant compiles one entrant when it supports the pattern set, in its
@@ -265,7 +337,7 @@ func boardEntrant(name string, patterns []string, asciiTier, exact bool) (boardE
 				start := veloz.IndexFold(h, needle)
 				return start, 0, start >= 0
 			}
-			return boardEngine{mode: "direct", find: find, each: func(h string, yield func(int, int, int) bool) bool {
+			return boardEngine{mode: "direct", find: find, strict: true, each: func(h string, yield func(int, int, int) bool) bool {
 				for at := 0; ; {
 					start, _, ok := find(h[at:])
 					if !ok {
@@ -295,45 +367,93 @@ func boardEntrant(name string, patterns []string, asciiTier, exact bool) (boardE
 			return view.Each(h, func(hit board.Hit) bool {
 				return yield(hit.Start, hit.Pattern, hit.Width)
 			})
-		}}, true, nil
+		}, strict: true}, true, nil
 	case "rustac":
 		// ASCII case insensitivity is exact on the ASCII tier only; exact
-		// matching compares bytes on every tier.
+		// matching compares bytes on every tier. Other folded cells use the
+		// explicitly translated simple-fold view over RustAC exact mode.
 		if !asciiTier && !exact {
-			return boardEngine{}, false, nil
+			view, err := board.NewRustACView(patterns)
+			if err != nil {
+				return boardEngine{}, true, err
+			}
+			return rustacViewEngine(view), true, nil
 		}
 		m, err := rustac.CompileAlternation(patterns, exact)
 		if err != nil {
 			return boardEngine{}, true, err
 		}
-		return boardEngine{find: m.Find, each: m.Each}, true, nil
+		return boardEngine{mode: "direct", find: m.Find, each: m.Each, release: m.Close}, true, nil
 	}
 	panic("unknown board entrant " + name)
 }
 
 // bind fixes the engine to the cell's operation. IndexFold cells hold one
 // pattern, so entrants answer them with Find.
-func (e boardEngine) bind(name, op, h string) boardRun {
+func (e boardEngine) bind(name, op, h string) boardBinding {
+	binding := boardBinding{
+		run:           boardRun{name: name},
+		strict:        e.strict,
+		requireWidths: op == "each" || e.findWithWidth != nil || e.findHit != nil,
+	}
 	if op == "each" {
-		return boardRun{name: name, scan: func(visit func(board.Hit) bool) {
-			e.each(h, func(start, pattern, width int) bool {
+		if eachErr := e.eachErr; eachErr != nil {
+			scanErr := func(visit func(board.Hit) bool) error {
+				_, err := eachErr(h, func(start, pattern, width int) bool {
+					return visit(board.Hit{Start: start, Pattern: pattern, Width: width})
+				})
+				return err
+			}
+			binding.scanErr = scanErr
+			binding.run.scan = func(visit func(board.Hit) bool) {
+				if err := scanErr(visit); err != nil {
+					panic(err)
+				}
+			}
+			return binding
+		}
+		each := e.each
+		binding.run.scan = func(visit func(board.Hit) bool) {
+			each(h, func(start, pattern, width int) bool {
 				return visit(board.Hit{Start: start, Pattern: pattern, Width: width})
 			})
-		}}
+		}
+		return binding
+	}
+	if findWithWidth := e.findWithWidth; findWithWidth != nil {
+		scanErr := func(visit func(board.Hit) bool) error {
+			start, pattern, width, ok, err := findWithWidth(h)
+			if err != nil {
+				return err
+			}
+			if ok {
+				visit(board.Hit{Start: start, Pattern: pattern, Width: width})
+			}
+			return nil
+		}
+		binding.scanErr = scanErr
+		binding.run.scan = func(visit func(board.Hit) bool) {
+			if err := scanErr(visit); err != nil {
+				panic(err)
+			}
+		}
+		return binding
 	}
 	if findHit := e.findHit; findHit != nil {
-		return boardRun{name: name, scan: func(visit func(board.Hit) bool) {
+		binding.run.scan = func(visit func(board.Hit) bool) {
 			if hit, ok := findHit(h); ok {
 				visit(hit)
 			}
-		}}
+		}
+		return binding
 	}
 	find := e.find
-	return boardRun{name: name, scan: func(visit func(board.Hit) bool) {
+	binding.run.scan = func(visit func(board.Hit) bool) {
 		if start, pattern, ok := find(h); ok {
 			visit(board.Hit{Start: start, Pattern: pattern, Width: -1})
 		}
-	}}
+	}
+	return binding
 }
 
 // boardHost names the CPU for the verifier's host rule: vendor, family, and
@@ -362,22 +482,30 @@ func TestBoardEntrantsAgree(t *testing.T) {
 		if spec.Size > 256<<10 {
 			continue
 		}
-		prepared, err := prepareBoardCell(spec, pinned[spec.Name()][1])
+		c, err := prepareBoardCell(spec, pinned[spec.Name()][1])
 		if err != nil {
 			t.Errorf("cell %s: %v", spec.Name(), err)
 			continue
 		}
-		wantMode := ""
+		wantVelozMode := ""
 		if !spec.Sensitive && board.VelozAvailable() {
 			if pinned[spec.Name()][0] == "ascii" && spec.Count == 1 {
-				wantMode = "direct"
+				wantVelozMode = "direct"
 			} else {
-				wantMode = "view"
+				wantVelozMode = "view"
 			}
 		}
-		if prepared.velozMode != wantMode {
-			t.Errorf("cell %s Veloz mode = %q, want %q", spec.Name(), prepared.velozMode, wantMode)
+		if c.velozMode != wantVelozMode {
+			t.Errorf("cell %s Veloz mode = %q, want %q", spec.Name(), c.velozMode, wantVelozMode)
 		}
+		wantRustACMode := "direct"
+		if !spec.Sensitive && pinned[spec.Name()][0] == "utf8" {
+			wantRustACMode = "view"
+		}
+		if c.rustacMode != wantRustACMode {
+			t.Errorf("cell %s RustAC mode = %q, want %q", spec.Name(), c.rustacMode, wantRustACMode)
+		}
+		c.close()
 	}
 }
 
@@ -432,7 +560,7 @@ func TestVelozBoardEntrantCoversOriginalFoldedCells(t *testing.T) {
 		if spec.Op != "each" && len(want) > 1 {
 			want = want[:1]
 		}
-		if err := engine.bind("veloz", spec.Op, cell.Haystack).agree(want, spec.Op == "each"); err != nil {
+		if err := engine.bind("veloz", spec.Op, cell.Haystack).agree(want); err != nil {
 			t.Errorf("%s: %v", spec.Name(), err)
 		}
 	}
@@ -443,6 +571,125 @@ func TestVelozBoardEntrantCoversOriginalFoldedCells(t *testing.T) {
 		if operations[op] == 0 {
 			t.Errorf("no folded %s cell was exercised", op)
 		}
+	}
+}
+
+func TestBoardBindingPreservesEachVisitorStop(t *testing.T) {
+	view, err := board.NewRustACView([]string{"k"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer view.Close()
+	binding := rustacViewEngine(view).bind("rustac", "each", "kk")
+	if binding.scanErr == nil {
+		t.Fatal("translated Each binding has no error-aware scan")
+	}
+	calls := 0
+	err = binding.scanErr(func(board.Hit) bool {
+		calls++
+		return false
+	})
+	if err != nil || calls != 1 {
+		t.Fatalf("stopped Each = callbacks %d, error %v; want one callback and no error", calls, err)
+	}
+}
+
+func TestBoardStrictAgreementPreservesReportedFields(t *testing.T) {
+	want := []board.Hit{{Start: 2, Pattern: 1, Width: 3}}
+	for _, got := range []board.Hit{
+		{Start: 2, Pattern: -1, Width: 3},
+		{Start: 2, Pattern: 1, Width: -1},
+	} {
+		scan := func(visit func(board.Hit) bool) {
+			visit(got)
+		}
+		generic := boardBinding{run: boardRun{name: "generic", scan: scan}}
+		if err := generic.agree(want); err != nil {
+			t.Fatalf("generic agreement no longer accepts an omitted diagnostic field: %v", err)
+		}
+		strict := boardBinding{run: boardRun{name: "translated", scan: scan}, strict: true, requireWidths: true}
+		if err := strict.agree(want); err == nil {
+			t.Fatalf("strict agreement accepted unreported hit %+v", got)
+		}
+	}
+
+	missingVelozID := boardBinding{
+		run:    boardRun{name: "veloz", scan: func(visit func(board.Hit) bool) { visit(board.Hit{Start: 2, Pattern: -1, Width: -1}) }},
+		strict: true,
+	}
+	if err := missingVelozID.agree(want[:1]); err == nil {
+		t.Fatal("strict Veloz agreement accepted a missing original ID")
+	}
+	missingEachWidth := boardBinding{
+		run:           boardRun{name: "direct each", scan: func(visit func(board.Hit) bool) { visit(board.Hit{Start: 2, Pattern: 1, Width: -1}) }},
+		requireWidths: true,
+	}
+	if err := missingEachWidth.agree(want); err == nil {
+		t.Fatal("Each agreement accepted a missing source width")
+	}
+}
+
+// TestRustACSimpleFoldViewEveryFoldedCell strictly checks the translated view
+// on all pinned folded operations, including large size-family inputs. When
+// the direct ASCII binding is selected, the translated view is still executed
+// separately as required by the board comparison contract.
+func TestRustACSimpleFoldViewEveryFoldedCell(t *testing.T) {
+	pinned := board.Pinned()
+	folded := 0
+	for _, spec := range board.Cells() {
+		if spec.Sensitive {
+			continue
+		}
+		folded++
+		cell := spec.Build()
+		if got, want := cell.Digest(), pinned[spec.Name()][1]; got != want {
+			t.Fatalf("%s digest %s, want %s", spec.Name(), got, want)
+		}
+		if !utf8.ValidString(cell.Haystack) || len(cell.Patterns) == 0 {
+			t.Fatalf("%s is outside the pinned nonempty valid-UTF8 workload", spec.Name())
+		}
+		for i, pattern := range cell.Patterns {
+			if pattern == "" || !utf8.ValidString(pattern) {
+				t.Fatalf("%s pattern %d is empty or invalid UTF-8", spec.Name(), i)
+			}
+		}
+		want := board.Matches(cell.Haystack, cell.Patterns, false)
+		if spec.Op != "each" && len(want) > 1 {
+			want = want[:1]
+		}
+
+		selected, supported, err := boardEntrant("rustac", cell.Patterns, cell.ASCII, false)
+		if err != nil || !supported {
+			t.Fatalf("%s RustAC support=%t, error=%v", spec.Name(), supported, err)
+		}
+		wantMode := "direct"
+		if !cell.ASCII {
+			wantMode = "view"
+		}
+		if selected.mode != wantMode || selected.strict != (wantMode == "view") {
+			t.Fatalf("%s selected RustAC mode=%q strict=%t, want mode=%q strict=%t", spec.Name(), selected.mode, selected.strict, wantMode, wantMode == "view")
+		}
+		if err := selected.bind("rustac", spec.Op, cell.Haystack).agree(want); err != nil {
+			selected.close()
+			t.Fatalf("%s selected RustAC: %v", spec.Name(), err)
+		}
+		selected.close()
+
+		if cell.ASCII {
+			translated, err := board.NewRustACView(cell.Patterns)
+			if err != nil {
+				t.Fatalf("%s translated view compile: %v", spec.Name(), err)
+			}
+			binding := rustacViewEngine(translated).bind("rustac", spec.Op, cell.Haystack)
+			err = binding.agree(want)
+			translated.Close()
+			if err != nil {
+				t.Fatalf("%s translated RustAC view: %v", spec.Name(), err)
+			}
+		}
+	}
+	if folded != 112 {
+		t.Fatalf("checked %d folded cells, want the 112 pinned folded operations", folded)
 	}
 }
 
@@ -464,10 +711,13 @@ func TestBoardHazardMatesAgree(t *testing.T) {
 				if !supported {
 					break
 				}
-				if start, _, _ := e.find("\n" + string(mate) + "\n"); start != 1 {
-					t.Errorf("%s does not fold %q (%U) with %q (%U)", name, r, r, mate, mate)
+				haystack := "\n" + string(mate) + "\n"
+				want := []board.Hit{{Start: 1, Pattern: 0, Width: utf8.RuneLen(mate)}}
+				if err := e.bind(name, "find", haystack).agree(want); err != nil {
+					t.Errorf("%s does not fold %q (%U) with %q (%U): %v", name, r, r, mate, mate, err)
 				}
 			}
+			e.close()
 		}
 	}
 }
@@ -496,14 +746,16 @@ func TestBoardExactEntrants(t *testing.T) {
 				t.Fatalf("%s %q: %v", name, c.patterns, err)
 			}
 			if !supported {
+				e.close()
 				continue
 			}
-			if err := e.bind(name, "find", c.haystack).agree(want[:1], false); err != nil {
+			if err := e.bind(name, "find", c.haystack).agree(want[:1]); err != nil {
 				t.Errorf("find %q in %q: %v", c.patterns, c.haystack, err)
 			}
-			if err := e.bind(name, "each", c.haystack).agree(want, true); err != nil {
+			if err := e.bind(name, "each", c.haystack).agree(want); err != nil {
 				t.Errorf("each %q in %q: %v", c.patterns, c.haystack, err)
 			}
+			e.close()
 		}
 	}
 }

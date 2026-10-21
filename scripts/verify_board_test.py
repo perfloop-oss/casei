@@ -23,10 +23,7 @@ def expected_supported(name, tier):
     out = {"regexp", "pcre2", "rure", "vectorscan", "stringzilla"}
     if name.endswith(",case=cs"):
         return out | {"rustac"}
-    out.add("veloz")
-    if tier == "ascii":
-        out.add("rustac")
-    return out
+    return out | {"veloz", "rustac"}
 
 
 def expected_mode(name, tier, active):
@@ -37,17 +34,27 @@ def expected_mode(name, tier, active):
     return 0, 1
 
 
-def line(name, ratio=0.5, supported=1, drop=None, extra=None, faster=None, mode=None):
+def expected_rustac_mode(name, tier, active):
+    if "rustac" not in active:
+        return 0, 0
+    if name.endswith(",case=cs") or tier == "ascii":
+        return 1, 0
+    return 0, 1
+
+
+def line(name, ratio=0.5, supported=1, drop=None, extra=None, faster=None, mode=None, rustac_mode=None):
     """A cell where every supporting entrant has ratio, except faster's 2x."""
     active = expected_supported(name, TIERS[name]) - {drop} | ({extra} - {None})
     if not supported:
         active = set()
     direct, view = expected_mode(name, TIERS[name], active) if mode is None else mode
+    rustac_direct, rustac_view = expected_rustac_mode(name, TIERS[name], active) if rustac_mode is None else rustac_mode
     metrics = " ".join(
         f"{int(e in active)} {e}_active {(2 * ratio if e == faster else ratio) if e in active else 0} {e}_x"
         for e in verify.ENTRANTS
     )
     metrics += f" {direct} veloz_direct_active {view} veloz_view_active"
+    metrics += f" {rustac_direct} rustac_direct_active {rustac_view} rustac_view_active"
     return f"BenchmarkBoard/{name}-8 1 1000 ns/op {supported} candidate_supported {metrics}\n"
 
 
@@ -128,10 +135,30 @@ class VerifyBoardTest(unittest.TestCase):
         self.assertFails(transcript(**{family("count")[3]: {"drop": "rure"}}), "rure_active=0, want 1")
 
     def test_tier_comes_from_cells_txt(self):
+        utf8 = next(n for n in NAMES if TIERS[n] == "utf8" and n.endswith(",case=ci"))
+        ascii = next(n for n in NAMES if TIERS[n] == "ascii" and n.endswith(",case=ci"))
+        exact = next(n for n in NAMES if n.endswith(",case=cs") and TIERS[n] == "utf8")
+        self.assertFails(transcript(**{utf8: {"drop": "rustac"}}), "rustac_active=0, want 1")
+        self.assertFails(transcript(**{utf8: {"rustac_mode": (1, 0)}}), "rustac_view_active=0, want 1")
+        self.assertFails(transcript(**{ascii: {"rustac_mode": (0, 1)}}), "rustac_view_active=1, want 0")
+        self.assertFails(transcript(**{exact: {"rustac_mode": (0, 1)}}), "rustac_view_active=1, want 0")
+
+    def test_rustac_supports_every_cell_and_labels_only_folded_utf8_views(self):
+        self.assertEqual(sum("rustac" in verify.supported(n, tier) for n, tier in TIERS.items()), 200)
+        self.assertEqual(sum(expected_rustac_mode(n, tier, expected_supported(n, tier))[1] for n, tier in TIERS.items()), 77)
+        exact = next(n for n in NAMES if n.endswith(",case=cs") and TIERS[n] == "utf8")
+        self.assertFails(transcript(**{exact: {"rustac_mode": (0, 1)}}), "rustac_view_active=1, want 0")
+
+    def test_verifier_rejects_a_missing_rustac_cell_for_each_operation(self):
+        for op in ("find", "each", "indexfold"):
+            name = next(n for n in NAMES if f",op={op}," in n and not n.endswith(",case=cs"))
+            self.assertFails(transcript(**{name: {"drop": "rustac"}}), f"{name}: rustac_active=0, want 1")
+
+    def test_verifier_rejects_corrupt_rustac_ratios(self):
         name = next(n for n in NAMES if TIERS[n] == "utf8" and n.endswith(",case=ci"))
-        self.assertFails(transcript(**{name: {"extra": "rustac"}}), "rustac_active=1, want 0")
-        name = next(n for n in NAMES if TIERS[n] == "ascii" and n.endswith(",case=ci"))
-        self.assertFails(transcript(**{name: {"drop": "rustac"}}), "rustac_active=0, want 1")
+        for bad in ("-0.5", "nan", "inf"):
+            text = transcript().replace(line(name), line(name).replace("0.5 rustac_x", f"{bad} rustac_x"))
+            self.assertFails(text, f"{name}: rustac_x={bad} is not a positive finite ratio")
 
     def test_case_sensitive_cells_need_the_exact_field(self):
         ascii = next(n for n in family("case/cs") if TIERS[n] == "ascii")
