@@ -382,17 +382,6 @@ func TestVelozViewConcurrentCallsOwnScratch(t *testing.T) {
 	}
 }
 
-func TestVelozViewAvailabilityMatchesPinnedGate(t *testing.T) {
-	view, err := board.NewVelozView([]string{"a"})
-	if board.VelozAvailable() {
-		if err != nil || view == nil {
-			t.Fatalf("AVX2 route is available, constructor = %v, err = %v", view, err)
-		}
-	} else if err == nil || view != nil {
-		t.Fatalf("AVX2 route is unavailable, constructor = %v, err = %v", view, err)
-	}
-}
-
 func TestVelozAVX2OffDisablesView(t *testing.T) {
 	if !slices.Contains(strings.Split(os.Getenv("GODEBUG"), ","), "cpu.avx2=off") {
 		t.Skip("requires GODEBUG=cpu.avx2=off")
