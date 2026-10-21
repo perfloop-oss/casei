@@ -83,6 +83,14 @@ class VerifyBoardTest(unittest.TestCase):
     def test_rejects_dropped_entrant(self):
         self.assertFails(transcript(**{family("count")[3]: {"drop": "rure"}}), "rure_active=0, want 1")
 
+    def test_rejects_unfinished_cell_even_with_complete_entrant_metrics(self):
+        name = next(iter(verify.CERTIFIED_ADDITIONS))
+        complete = line(name)
+        partial = complete.replace("1 candidate_supported", "0 candidate_supported", 1)
+        self.assertNotEqual(partial, complete)
+        self.assertFails(transcript().replace(complete, partial),
+                         f"{name}: casei does not support this cell")
+
     def test_tier_comes_from_cells_txt(self):
         name = next(n for n in NAMES if TIERS[n] == "utf8" and n.endswith(",case=ci")
                     and n not in verify.CERTIFIED_ADDITIONS)

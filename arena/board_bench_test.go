@@ -48,11 +48,18 @@ func BenchmarkBoard(b *testing.B) {
 					b.ReportMetric(value, unit)
 				}
 			}()
-			c, err := prepareBoardCell(spec, pinned[spec.Name()][1])
+			c, err := prepareBoardCell(spec, pinned[spec.Name()][1], true)
 			if err != nil {
 				b.Fatalf("cell %s: %v", spec.Name(), err)
 			}
 			for _, e := range c.entrants {
+				metrics[e.name+"_active"], metrics[e.name+"_x"] = 1, pairedRatio(c.candidate.run, e.run)
+			}
+			deferred, err := c.prepareDeferredEntrants(spec)
+			if err != nil {
+				b.Fatalf("cell %s: %v", spec.Name(), err)
+			}
+			for _, e := range deferred {
 				metrics[e.name+"_active"], metrics[e.name+"_x"] = 1, pairedRatio(c.candidate.run, e.run)
 			}
 			for b.Loop() {
@@ -66,8 +73,10 @@ func BenchmarkBoard(b *testing.B) {
 // boardCell is a built cell with casei and every supporting entrant bound to
 // the cell's operation.
 type boardCell struct {
-	candidate boardRun
-	entrants  []boardRun
+	candidate        boardRun
+	entrants         []boardRun
+	deferredEntrants []string
+	cell             board.Cell
 }
 
 // boardRun is one implementation's operation on the cell. scan reports each
@@ -79,14 +88,14 @@ type boardRun struct {
 
 func (r boardRun) run() { r.scan(func(board.Hit) bool { matcherSink++; return true }) }
 
-// prepareBoardCell builds the cell, checks it against its pinned digest, and
-// holds casei and every supporting entrant to the oracle before any timing, so
-// no ratio comes from a different cell or a wrong answer. A case-sensitive
-// cell runs every implementation in its exact mode against the raw-byte
-// oracle. The board plants only fold mates every entrant handles
-// (board.HazardMates), so any wrong answer is a casei, board, or adapter bug
-// and fails the cell.
-func prepareBoardCell(spec board.Spec, digest string) (*boardCell, error) {
+// prepareBoardCell builds the cell and checks its pinned digest. It checks
+// casei and every eagerly prepared entrant against the oracle before timing.
+// BenchmarkBoard defers RustAC/Veloz preparation on non-ASCII-tier folded cells
+// until after existing entrant ratios; each deferred entrant is checked before
+// its own pair, and the cell is not marked supported until all pairs complete.
+// A case-sensitive cell uses the raw-byte oracle. The board plants only fold
+// mates every entrant handles (board.HazardMates), so any wrong answer fails.
+func prepareBoardCell(spec board.Spec, digest string, deferByteEntrants ...bool) (*boardCell, error) {
 	cell := spec.Build()
 	if got := cell.Digest(); got != digest {
 		return nil, fmt.Errorf("built digest %s, cells.txt has %q", got, digest)
@@ -95,9 +104,17 @@ func prepareBoardCell(spec board.Spec, digest string) (*boardCell, error) {
 	if spec.Op != "each" && len(want) > 1 {
 		want = want[:1]
 	}
+	deferBytes := len(deferByteEntrants) != 0 && deferByteEntrants[0] && !cell.ASCII && !spec.Sensitive
 	c := &boardCell{candidate: boardCandidate(spec, cell)}
+	if deferBytes {
+		c.cell = cell
+	}
 	runs := []boardRun{c.candidate}
 	for _, name := range boardEntrants {
+		if deferBytes && (name == "veloz" || name == "rustac") {
+			c.deferredEntrants = append(c.deferredEntrants, name)
+			continue
+		}
 		e, supported, err := boardEntrant(name, cell.Patterns, cell.ASCII, spec.Sensitive)
 		if err != nil {
 			return nil, fmt.Errorf("%s supports the cell but cannot compile it: %v", name, err)
@@ -113,6 +130,38 @@ func prepareBoardCell(spec board.Spec, digest string) (*boardCell, error) {
 		}
 	}
 	return c, nil
+}
+
+// prepareDeferredEntrants compiles and oracle-checks byte-language entrants
+// after existing field pairs have been measured. Their own paired timings still
+// follow each check, and any failure invalidates the complete cell.
+func (c *boardCell) prepareDeferredEntrants(spec board.Spec) ([]boardRun, error) {
+	if len(c.deferredEntrants) == 0 {
+		return nil, nil
+	}
+	runs := make([]boardRun, 0, len(c.deferredEntrants))
+	for _, name := range c.deferredEntrants {
+		engine, supported, err := boardEntrant(name, c.cell.Patterns, c.cell.ASCII, spec.Sensitive)
+		if err != nil {
+			return nil, fmt.Errorf("%s supports the cell but cannot compile it: %v", name, err)
+		}
+		if supported {
+			runs = append(runs, engine.bind(name, spec.Op, c.cell.Haystack))
+		}
+	}
+	if len(runs) == 0 {
+		return nil, nil
+	}
+	want := board.Matches(c.cell.Haystack, c.cell.Patterns, spec.Sensitive)
+	if spec.Op != "each" && len(want) > 1 {
+		want = want[:1]
+	}
+	for _, run := range runs {
+		if err := run.agree(want); err != nil {
+			return nil, err
+		}
+	}
+	return runs, nil
 }
 
 // agree runs r once and holds its hits to the oracle's.
