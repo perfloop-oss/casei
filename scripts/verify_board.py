@@ -9,9 +9,10 @@
 - casei answers every cell, case-sensitive cells included, and every pinned
   entrant that supports a cell was timed: on a case-sensitive cell, every
   entrant with an exact mode. RustAC is direct on ASCII folded/exact cells and
-  uses its labeled simple-fold view on folded UTF-8 cells. Veloz is required on
-  every folded cell; mode flags distinguish its direct ASCII-singleton route
-  from the translated view.
+  the seven digest-pinned folded UTF-8 cells whose complete fold languages fit
+  an unchanged native byte mode; other folded UTF-8 cells use its labeled view.
+  Veloz is required on every folded cell; mode flags distinguish its direct
+  ASCII-singleton route from the translated view.
   (BenchmarkBoard fails a cell outright on any wrong answer, so a wrong answer
   leaves its cell out of the run.)
 - Every timed entrant's ratio is positive and finite. A cell's x_vs_best is
@@ -57,6 +58,15 @@ PINNED = Path(__file__).resolve().parent.parent / "arena" / "board" / "cells.txt
 ENTRANTS = ("regexp", "pcre2", "rure", "vectorscan", "stringzilla", "veloz", "rustac")
 VELOZ_MODES = ("veloz_direct_active", "veloz_view_active")
 RUSTAC_MODES = ("rustac_direct_active", "rustac_view_active")
+RUSTAC_CERTIFIED_UTF8_MODES = {
+    "length/3-4/03/n=1,len=3-4,size=206100,first=0.93,spacing=1024,op=indexfold,nonascii=100,corpus=code,case=ci": "exact",
+    "size/1MiB-4MiB/00/n=1,len=3-4,size=2451052,first=0.56,spacing=65536,op=indexfold,nonascii=100,corpus=code,case=ci": "exact",
+    "case/ci/09/n=1,len=5-8,size=159739,first=0.26,spacing=0,op=indexfold,nonascii=0,corpus=russian,case=ci": "ascii",
+    "corpus/russian/02/n=1,len=3-4,size=9564,first=0.63,spacing=65536,op=each,nonascii=50,corpus=russian,case=ci": "ascii",
+    "op/indexfold/00/n=1,len=5-8,size=11181,first=0.11,spacing=1024,op=indexfold,nonascii=0,corpus=russian,case=ci": "ascii",
+    "op/indexfold/04/n=1,len=2-2,size=22972,first=0.86,spacing=0,op=indexfold,nonascii=50,corpus=russian,case=ci": "ascii",
+    "script/ascii/01/n=2,len=2-2,size=34069,first=1.00,spacing=65536,op=find,nonascii=0,corpus=russian,case=ci": "ascii",
+}
 HOST = {"vendor": "GenuineIntel", "family": "6", "model": "143",
         "avx2": "1", "avx512f": "1", "avx512bw": "1", "avx512vbmi": "1"}
 AGGREGATE_LIMIT = 1.0
@@ -123,8 +133,8 @@ def expected_veloz_modes(name, tier):
 
 
 def expected_rustac_modes(name, tier):
-    """Return direct RustAC or its labeled simple-fold view mode."""
-    if name.endswith(",case=cs") or tier == "ascii":
+    """Return direct RustAC on its native tiers and seven certified UTF-8 cells."""
+    if name.endswith(",case=cs") or tier == "ascii" or name in RUSTAC_CERTIFIED_UTF8_MODES:
         return 1, 0
     return 0, 1
 
