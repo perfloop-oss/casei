@@ -16,6 +16,15 @@ import verify_board as verify
 SEED, TIERS = verify.load_pinned()
 NAMES = sorted(TIERS)
 HEADER = f"board: seed={SEED:#x} cells=200 vendor=GenuineIntel family=6 model=143 avx2=1 avx512f=1 avx512bw=1 avx512vbmi=1\n"
+CERTIFIED_RUSTAC_UTF8 = {
+    "length/3-4/03/n=1,len=3-4,size=206100,first=0.93,spacing=1024,op=indexfold,nonascii=100,corpus=code,case=ci": "exact",
+    "size/1MiB-4MiB/00/n=1,len=3-4,size=2451052,first=0.56,spacing=65536,op=indexfold,nonascii=100,corpus=code,case=ci": "exact",
+    "case/ci/09/n=1,len=5-8,size=159739,first=0.26,spacing=0,op=indexfold,nonascii=0,corpus=russian,case=ci": "ascii",
+    "corpus/russian/02/n=1,len=3-4,size=9564,first=0.63,spacing=65536,op=each,nonascii=50,corpus=russian,case=ci": "ascii",
+    "op/indexfold/00/n=1,len=5-8,size=11181,first=0.11,spacing=1024,op=indexfold,nonascii=0,corpus=russian,case=ci": "ascii",
+    "op/indexfold/04/n=1,len=2-2,size=22972,first=0.86,spacing=0,op=indexfold,nonascii=50,corpus=russian,case=ci": "ascii",
+    "script/ascii/01/n=2,len=2-2,size=34069,first=1.00,spacing=65536,op=find,nonascii=0,corpus=russian,case=ci": "ascii",
+}
 
 
 def expected_supported(name, tier):
@@ -37,7 +46,7 @@ def expected_mode(name, tier, active):
 def expected_rustac_mode(name, tier, active):
     if "rustac" not in active:
         return 0, 0
-    if name.endswith(",case=cs") or tier == "ascii":
+    if name.endswith(",case=cs") or tier == "ascii" or name in CERTIFIED_RUSTAC_UTF8:
         return 1, 0
     return 0, 1
 
@@ -142,10 +151,26 @@ class VerifyBoardTest(unittest.TestCase):
         self.assertFails(transcript(**{utf8: {"rustac_mode": (1, 0)}}), "rustac_view_active=0, want 1")
         self.assertFails(transcript(**{ascii: {"rustac_mode": (0, 1)}}), "rustac_view_active=1, want 0")
         self.assertFails(transcript(**{exact: {"rustac_mode": (0, 1)}}), "rustac_view_active=1, want 0")
+        direct = next(n for n in NAMES if n in CERTIFIED_RUSTAC_UTF8)
+        self.assertFails(transcript(**{direct: {"rustac_mode": (0, 1)}}), "rustac_direct_active=0, want 1")
 
-    def test_rustac_supports_every_cell_and_labels_only_folded_utf8_views(self):
+    def test_rustac_supports_every_cell_and_pins_exactly_seven_folded_utf8_modes(self):
         self.assertEqual(sum("rustac" in verify.supported(n, tier) for n, tier in TIERS.items()), 200)
-        self.assertEqual(sum(expected_rustac_mode(n, tier, expected_supported(n, tier))[1] for n, tier in TIERS.items()), 77)
+        folded_utf8 = {n for n, tier in TIERS.items() if tier == "utf8" and not n.endswith(",case=cs")}
+        self.assertEqual(len(folded_utf8), 77)
+        self.assertTrue(set(CERTIFIED_RUSTAC_UTF8) <= folded_utf8)
+        self.assertTrue(all(TIERS[n] == "utf8" and n.endswith(",case=ci") for n in CERTIFIED_RUSTAC_UTF8))
+        self.assertEqual(CERTIFIED_RUSTAC_UTF8, verify.RUSTAC_CERTIFIED_UTF8_MODES)
+        self.assertEqual(list(CERTIFIED_RUSTAC_UTF8.values()).count("exact"), 2)
+        self.assertEqual(list(CERTIFIED_RUSTAC_UTF8.values()).count("ascii"), 5)
+        direct = {n for n in folded_utf8 if expected_rustac_mode(n, "utf8", {"rustac"}) == (1, 0)}
+        views = {n for n in folded_utf8 if expected_rustac_mode(n, "utf8", {"rustac"}) == (0, 1)}
+        self.assertEqual(direct, set(CERTIFIED_RUSTAC_UTF8))
+        self.assertEqual(len(views), 70)
+        mixed = next(n for n in folded_utf8 if n.startswith("count/2/01/"))
+        self.assertEqual(expected_rustac_mode(mixed, "utf8", {"rustac"}), (0, 1))
+        failures = self.verify(transcript(**{mixed: {"rustac_mode": (1, 0)}}))[1]
+        self.assertTrue(any(f"{mixed}: rustac_view_active=0, want 1" in failure for failure in failures), failures)
         exact = next(n for n in NAMES if n.endswith(",case=cs") and TIERS[n] == "utf8")
         self.assertFails(transcript(**{exact: {"rustac_mode": (0, 1)}}), "rustac_view_active=1, want 0")
 
