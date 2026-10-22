@@ -260,6 +260,23 @@ func (e *boardEngine) close() {
 	}
 }
 
+// collectBoardEngineEach preserves Each's completion and source-width results in tests.
+func collectBoardEngineEach(e boardEngine, haystack string) ([]board.Hit, bool, error) {
+	var hits []board.Hit
+	yield := func(start, pattern, width int) bool {
+		hits = append(hits, board.Hit{Start: start, Pattern: pattern, Width: width})
+		return true
+	}
+	if e.eachErr != nil {
+		complete, err := e.eachErr(haystack, yield)
+		return hits, complete, err
+	}
+	if e.each == nil {
+		return nil, false, fmt.Errorf("%s has no Each implementation", e.mode)
+	}
+	return hits, e.each(haystack, yield), nil
+}
+
 // asciiFoldOrbit reports whether every rune in r's complete simple-fold orbit
 // is ASCII and whether that orbit is invariant. The starting rune is included
 // in the ASCII property; invariant non-ASCII runes are exact but not ASCII.
@@ -757,6 +774,13 @@ func TestRustACModesOnEveryFoldedCell(t *testing.T) {
 			selected.close()
 			t.Fatalf("%s selected RustAC: %v", spec.Name(), err)
 		}
+		if spec.Op == "each" {
+			got, complete, err := collectBoardEngineEach(selected, cell.Haystack)
+			if err != nil || !complete || !slices.Equal(got, want) {
+				selected.close()
+				t.Fatalf("%s selected RustAC Each complete=%t hits=%v error=%v, want %v", spec.Name(), complete, got, err, want)
+			}
+		}
 		selected.close()
 
 		if cell.ASCII || selected.mode == "direct" {
@@ -936,6 +960,11 @@ func TestRustACCertifiedLanguagesAndNativeOrdering(t *testing.T) {
 		if err := engine.bind("rustac", "each", haystack).agree(want); err != nil {
 			engine.close()
 			t.Errorf("%s %s full fold language Each: %v", name, nativeMode, err)
+		}
+		got, complete, err := collectBoardEngineEach(engine, haystack)
+		if err != nil || !complete || !slices.Equal(got, want) {
+			engine.close()
+			t.Errorf("%s %s full fold language Each complete=%t hits=%v error=%v, want %v", name, nativeMode, complete, got, err, want)
 		}
 		if len(want) > 1 {
 			want = want[:1]
