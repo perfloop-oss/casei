@@ -425,7 +425,7 @@ func boardEntrant(name string, patterns []string, asciiTier, exact bool) (boardE
 		if err != nil {
 			return boardEngine{}, true, err
 		}
-		return boardEngine{mode: "direct", find: m.Find, each: m.Each, release: m.Close}, true, nil
+		return boardEngine{mode: "direct", find: m.Find, each: m.Each, strict: true, release: m.Close}, true, nil
 	}
 	panic("unknown board entrant " + name)
 }
@@ -750,8 +750,8 @@ func TestRustACModesOnEveryFoldedCell(t *testing.T) {
 		if err != nil || !supported {
 			t.Fatalf("%s RustAC support=%t, error=%v", spec.Name(), supported, err)
 		}
-		if selected.mode != wantMode || selected.strict != (wantMode == "view") {
-			t.Fatalf("%s selected RustAC mode=%q strict=%t, want mode=%q strict=%t", spec.Name(), selected.mode, selected.strict, wantMode, wantMode == "view")
+		if selected.mode != wantMode || !selected.strict {
+			t.Fatalf("%s selected RustAC mode=%q strict=%t, want mode=%q with strict result IDs", spec.Name(), selected.mode, selected.strict, wantMode)
 		}
 		if err := selected.bind("rustac", spec.Op, cell.Haystack).agree(want); err != nil {
 			selected.close()
