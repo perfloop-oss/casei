@@ -25,6 +25,14 @@ CERTIFIED_RUSTAC_UTF8 = {
     "op/indexfold/04/n=1,len=2-2,size=22972,first=0.86,spacing=0,op=indexfold,nonascii=50,corpus=russian,case=ci": "ascii",
     "script/ascii/01/n=2,len=2-2,size=34069,first=1.00,spacing=65536,op=find,nonascii=0,corpus=russian,case=ci": "ascii",
 }
+CERTIFIED_VELOZ_UTF8_CELLS = {
+    "length/3-4/03/n=1,len=3-4,size=206100,first=0.93,spacing=1024,op=indexfold,nonascii=100,corpus=code,case=ci",
+    "case/ci/09/n=1,len=5-8,size=159739,first=0.26,spacing=0,op=indexfold,nonascii=0,corpus=russian,case=ci",
+    "corpus/russian/02/n=1,len=3-4,size=9564,first=0.63,spacing=65536,op=each,nonascii=50,corpus=russian,case=ci",
+    "size/1MiB-4MiB/00/n=1,len=3-4,size=2451052,first=0.56,spacing=65536,op=indexfold,nonascii=100,corpus=code,case=ci",
+    "op/indexfold/00/n=1,len=5-8,size=11181,first=0.11,spacing=1024,op=indexfold,nonascii=0,corpus=russian,case=ci",
+    "op/indexfold/04/n=1,len=2-2,size=22972,first=0.86,spacing=0,op=indexfold,nonascii=50,corpus=russian,case=ci",
+}
 
 
 def expected_supported(name, tier):
@@ -39,6 +47,8 @@ def expected_mode(name, tier, active):
     if "veloz" not in active or name.endswith(",case=cs"):
         return 0, 0
     if tier == "ascii" and "/n=1," in name:
+        return 1, 0
+    if tier == "utf8" and "/n=1," in name and name in CERTIFIED_VELOZ_UTF8_CELLS:
         return 1, 0
     return 0, 1
 
@@ -114,6 +124,23 @@ class VerifyBoardTest(unittest.TestCase):
         view = next(n for n in NAMES if not n.endswith(",case=cs") and expected_mode(n, TIERS[n], expected_supported(n, TIERS[n])) == (0, 1))
         self.assertFails(transcript(**{direct: {"mode": (0, 1)}}), f"{direct}: veloz_direct_active=0, want 1")
         self.assertFails(transcript(**{view: {"mode": (1, 0)}}), f"{view}: veloz_view_active=0, want 1")
+
+    def test_verifier_pins_the_complete_veloz_utf8_mode_census(self):
+        folded = [n for n in NAMES if not n.endswith(",case=cs")]
+        certified = {
+            n for n in folded
+            if TIERS[n] == "utf8" and expected_mode(n, TIERS[n], expected_supported(n, TIERS[n])) == (1, 0)
+        }
+        self.assertEqual(certified, CERTIFIED_VELOZ_UTF8_CELLS)
+        self.assertEqual(CERTIFIED_VELOZ_UTF8_CELLS, verify.VELOZ_DIRECT_UTF8_CELLS)
+        modes = [expected_mode(n, TIERS[n], expected_supported(n, TIERS[n])) for n in folded]
+        self.assertEqual((modes.count((1, 0)), modes.count((0, 1))), (15, 97))
+        script = next(n for n in folded if n.startswith("script/ascii/01/"))
+        self.assertIn("/n=2,", script)
+        self.assertEqual(expected_mode(script, TIERS[script], expected_supported(script, TIERS[script])), (0, 1))
+        for name in folded:
+            if TIERS[name] == "utf8" and name not in CERTIFIED_VELOZ_UTF8_CELLS:
+                self.assertFails(transcript(**{name: {"mode": (1, 0)}}), f"{name}: veloz_view_active=0, want 1")
 
     # A broken aggregate: every cell within 1.10, the family's mean at 1.0.
     def test_rejects_family_aggregate_at_one(self):

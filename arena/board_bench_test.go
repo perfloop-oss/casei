@@ -310,6 +310,26 @@ func rustacByteModeCertificates(patterns []string) (exact, asciiCaseless bool) {
 	return exact, asciiCaseless
 }
 
+// velozPatternFoldByteEquivalent reports whether Veloz's ASCII-byte fold can
+// implement the complete simple-fold language of one valid UTF-8 pattern. An
+// ASCII rune's full orbit must stay ASCII; each non-ASCII rune must be fixed.
+func velozPatternFoldByteEquivalent(pattern string) bool {
+	if pattern == "" || !utf8.ValidString(pattern) {
+		return false
+	}
+	for _, r := range pattern {
+		allASCII, invariant := asciiFoldOrbit(r)
+		if r < utf8.RuneSelf {
+			if !allASCII {
+				return false
+			}
+		} else if !invariant {
+			return false
+		}
+	}
+	return true
+}
+
 // boardEntrant compiles one entrant when it supports the pattern set, in its
 // native case-sensitive mode when exact. The support rules are field.yaml's
 // tier/board_tier and exact_tier plus the process gates this board applies. A
@@ -380,8 +400,9 @@ func boardEntrant(name string, patterns []string, asciiTier, exact bool) (boardE
 		if exact || !board.VelozAvailable() {
 			return boardEngine{}, false, nil
 		}
-		if asciiTier && single {
-			// Keep the existing direct ASCII-singleton binding.
+		if single && (asciiTier || velozPatternFoldByteEquivalent(patterns[0])) {
+			// Keep the ASCII-tier binding and use the byte mode for a complete
+			// folded pattern language that Veloz can represent directly.
 			needle, runes := patterns[0], utf8.RuneCountInString(patterns[0])
 			find := func(h string) (int, int, bool) {
 				start := veloz.IndexFold(h, needle)
@@ -574,7 +595,7 @@ func TestBoardEntrantsAgree(t *testing.T) {
 		}
 		wantVelozMode := ""
 		if !spec.Sensitive && board.VelozAvailable() {
-			if pinned[spec.Name()][0] == "ascii" && spec.Count == 1 {
+			if expectedVelozDirect(spec.Name(), pinned[spec.Name()][0], spec.Count) {
 				wantVelozMode = "direct"
 			} else {
 				wantVelozMode = "view"
@@ -591,9 +612,9 @@ func TestBoardEntrantsAgree(t *testing.T) {
 	}
 }
 
-// TestVelozBoardEntrantCoversOriginalFoldedCells exercises the actual
-// BenchmarkBoard binding on all original cells, including the translated view
-// when a direct ASCII-singleton mode is selected. Exact cells remain excluded.
+// TestVelozBoardEntrantCoversOriginalFoldedCells exercises the selected
+// BenchmarkBoard binding on all original cells, including its direct and
+// translated modes. Exact cells remain excluded.
 func TestVelozBoardEntrantCoversOriginalFoldedCells(t *testing.T) {
 	if velozVectorBits() != 256 {
 		t.Skip("pinned Veloz field entry requires AVX2")
@@ -624,7 +645,7 @@ func TestVelozBoardEntrantCoversOriginalFoldedCells(t *testing.T) {
 			continue
 		}
 		wantMode := "view"
-		if cell.ASCII && len(cell.Patterns) == 1 {
+		if expectedVelozDirect(spec.Name(), pinned[spec.Name()][0], len(cell.Patterns)) {
 			wantMode = "direct"
 		}
 		if engine.mode != wantMode {
