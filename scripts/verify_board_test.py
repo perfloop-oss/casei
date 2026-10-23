@@ -98,7 +98,14 @@ class VerifyBoardTest(unittest.TestCase):
 
     def test_accepts_a_winning_board(self):
         self.assertEqual(len(NAMES), 200)
-        self.assertEqual(self.verify(transcript())[1], [])
+        for vendor, family, model in (("GenuineIntel", "6", "106"),
+                                      ("GenuineIntel", "6", "143"),
+                                      ("GenuineIntel", "6", "207"),
+                                      ("AuthenticAMD", "25", "97")):
+            with self.subTest(vendor=vendor, family=family, model=model):
+                header = HEADER.replace("vendor=GenuineIntel family=6 model=143",
+                                        f"vendor={vendor} family={family} model={model}")
+                self.assertEqual(self.verify(transcript(header=header))[1], [])
 
     def test_support_roster_covers_all_original_folded_cells(self):
         folded = [n for n in NAMES if not n.endswith(",case=cs")]
@@ -236,9 +243,12 @@ class VerifyBoardTest(unittest.TestCase):
     def test_rejects_unpinned_seed(self):
         self.assertFails(transcript(header=HEADER.replace(f"{SEED:#x}", "0x1")), "is not the pinned seed")
 
-    def test_rejects_wrong_host(self):
-        self.assertFails(transcript(header=HEADER.replace("model=143", "model=106")), "host: model=106")
-        self.assertFails(transcript(header=HEADER.replace("avx2=1", "avx2=0")), "host: avx2=0, want 1")
+    def test_rejects_missing_required_features(self):
+        for feature in ("avx2", "avx512f", "avx512bw", "avx512vbmi"):
+            for replacement in (f"{feature}=0", ""):
+                with self.subTest(feature=feature, replacement=replacement):
+                    header = HEADER.replace(f"{feature}=1", replacement)
+                    self.assertFails(transcript(header=header), f"host: {feature}=")
 
 
     def test_verifies_one_family(self):
@@ -324,9 +334,13 @@ class CompareTest(unittest.TestCase):
         self.assertEqual([f.split(":")[0] for f in failures], ["density"])
 
     def test_compare_checks_each_run(self):
-        bad = transcript(header=HEADER.replace("model=143", "model=106"))
-        failures = self.compare([transcript()] * 2, [transcript(), bad])[1]
-        self.assertTrue(any("change1.txt: host: model=106" in f for f in failures), failures)
+        bad = transcript(header=HEADER.replace("avx512vbmi=1", "avx512vbmi=0"))
+        for arm in ("master", "change"):
+            with self.subTest(arm=arm):
+                runs = {"master": [transcript()] * 2, "change": [transcript()] * 2}
+                runs[arm][1] = bad
+                failures = self.compare(runs["master"], runs["change"])[1]
+                self.assertTrue(any(f"{arm}1.txt: host: avx512vbmi=0" in f for f in failures), failures)
         unanswered = transcript(**{family("case")[0]: {"supported": 0}})
         self.assertIn("case: the runs do not all answer the same cells",
                       self.compare([transcript()] * 2, [transcript(), unanswered])[1])
