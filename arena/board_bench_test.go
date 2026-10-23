@@ -536,8 +536,8 @@ func (e boardEngine) bind(name, op, h string) boardBinding {
 	return binding
 }
 
-// boardHost names the CPU for the verifier's host rule: vendor, family, and
-// model from /proc/cpuinfo, and the AVX2/AVX-512 features this process can use.
+// boardHost records CPU identity as measurement provenance and the usable
+// AVX2/AVX-512 features that qualify the run for board verification.
 func boardHost() string {
 	fields := map[string]string{"vendor_id": "unknown", "cpu family": "0", "model": "0"}
 	if data, err := os.ReadFile("/proc/cpuinfo"); err == nil {

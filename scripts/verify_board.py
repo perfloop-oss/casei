@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Fail unless a BenchmarkBoard transcript satisfies the generality board's rules.
 
-- The run is on Sapphire Rapids: GenuineIntel family 6 model 143 with
-  AVX-512F/BW/VBMI.
+- The run has usable AVX2 and AVX-512F/BW/VBMI. CPU vendor, family, and model
+  record measurement provenance, not eligibility or performance on another host.
 - It measured exactly the cells pinned in arena/board/cells.txt, or with
   --family, exactly that family's cells, for iterating on one family; the
   full board is the acceptance check.
@@ -76,8 +76,7 @@ RUSTAC_CERTIFIED_UTF8_MODES = {
     "op/indexfold/04/n=1,len=2-2,size=22972,first=0.86,spacing=0,op=indexfold,nonascii=50,corpus=russian,case=ci": "ascii",
     "script/ascii/01/n=2,len=2-2,size=34069,first=1.00,spacing=65536,op=find,nonascii=0,corpus=russian,case=ci": "ascii",
 }
-HOST = {"vendor": "GenuineIntel", "family": "6", "model": "143",
-        "avx2": "1", "avx512f": "1", "avx512bw": "1", "avx512vbmi": "1"}
+HOST = {"avx2": "1", "avx512f": "1", "avx512bw": "1", "avx512vbmi": "1"}
 AGGREGATE_LIMIT = 1.0
 CELL_LIMIT = 1.10
 ALPHA = 0.05  # chance that compare fails a change with no effect
